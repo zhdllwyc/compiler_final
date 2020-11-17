@@ -1,0 +1,18 @@
+#!/bin/bash
+
+module load c7
+module load gcc/8.1
+
+ComputeCpp_SDK=/org/centers/cdgc/ComputeCpp/ComputeCpp/
+ComputeCpp_DIR=/org/centers/cdgc/ComputeCpp/ComputeCpp-CE-2.2.1-x86_64-linux-gnu/
+OpenCL_INCLUDE_DIR=/org/centers/cdgc/ComputeCpp/OpenCL-Headers/
+OpenCL_LIBRARY=/org/centers/cdgc/ComputeCpp/ocl-icd/install/lib/
+
+#setenv          ComputeCpp_DIR      $ComputeCpp_DIR
+#setenv          OpenCL_INCLUDE_DIR  $OpenCL_INCLUDE_DIR
+#setenv          OpenCL_LIBRARY      $OpenCL_LIBRARY
+
+
+PATH=$ComputeCpp_DIR/bin:$PATH
+CPLUS_INCLUDE_PATH=$ComputeCpp_DIR/include:$OpenCL_INCLUDE_DIR:$ComputeCpp_SDK/include:$CPLUS_INCLUDE_PATH
+LD_LIBRARY_PATH=$ComputeCpp_DIR/lib:$OpenCL_LIBRARY:$LD_LIBRARY_PATH
