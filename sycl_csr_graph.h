@@ -25,6 +25,9 @@ public:
         if (this->data != nullptr) free(this->data);
     }
 
+    // Load the graph, infering the type from the filename
+    int load(string filename);
+
     // Load the graph from a .txt file with a list of edges
     int loadTxt(string filename);
 

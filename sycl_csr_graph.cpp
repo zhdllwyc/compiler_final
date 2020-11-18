@@ -45,6 +45,27 @@ void SYCL_CSR_Graph::allocateArrays() {
     this->nodePtr[0] = 0;
 }
 
+bool hasEnding (std::string const &fullString, std::string const &ending) {
+    if (fullString.length() >= ending.length()) {
+        return (0 == fullString.compare (fullString.length() - ending.length(), ending.length(), ending));
+    } else {
+        return false;
+    }
+}
+
+// load the file and infer graph type
+int SYCL_CSR_Graph::load(string filename) {
+    if (hasEnding(filename, ".txt")) {
+        return this->loadTxt(filename);
+    } else if (hasEnding(filename, ".gr")) {
+        return this->loadGalois(filename);
+    } else {
+        cout << "Cannot infer graph type from filename " << filename;
+        cout << ". Expected .txt for edge-list format or .gr for Galois format." << endl;
+        return 0;
+    }
+}
+
 int SYCL_CSR_Graph::loadTxt(string filename) {
     ifstream infile(filename);
 
