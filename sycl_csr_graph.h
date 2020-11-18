@@ -3,6 +3,8 @@
 
 #include <string>
 
+#define MAX_PRINT_NODES 10
+
 using namespace std;
 
 class SYCL_CSR_Graph {
@@ -23,12 +25,11 @@ public:
         if (this->data != nullptr) free(this->data);
     }
 
-
     // Load the graph from a .txt file with a list of edges
     int loadTxt(string filename);
 
-    // TODO:: figure out the format for the galois graphs and implement loading them
-    //int loadGalois(string filename);
+    // Load a graph from the binary format used by the Galois library
+    int loadGalois(string filename);
     
     // Print out the graph (for small graphs only)
     void printGraph();
@@ -75,6 +76,10 @@ protected:
     // Contains the 'destinations' of the edges
     // For PageRank and BFS, we don't care about edge weights
     int* data;
+
+    // Allocate memory for the graph
+    // Must be called after the number of edges and nodes are known
+    void allocateArrays();
 };
 
 #endif
