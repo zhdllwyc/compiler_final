@@ -15,4 +15,8 @@ int main(int argc, const char ** argv) {
 
     cout << "Loaded graph with " << g.numNodes << " nodes and " << g.numEdges << " edges" << endl;
     g.printGraph();
+    SYCL_CSR_Graph * f = g.flip();
+    cout << "Flipped graph" << endl;
+    f->printGraph();
+    delete f;
 }

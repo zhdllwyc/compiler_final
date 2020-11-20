@@ -14,6 +14,7 @@
 #include "limits.h"
 #include "stdlib.h"
 #include "unistd.h"
+#include "string.h"
 
 void SYCL_CSR_Graph::printGraph() {
     int skipped = 0;
@@ -43,6 +44,7 @@ void SYCL_CSR_Graph::allocateArrays() {
     this->nodePtr = (int*)malloc(sizeof(int)*(n+1));
     this->data = (int*)malloc(sizeof(int)*m);
     this->nodePtr[0] = 0;
+    memset(this->nodeDegree, 0, sizeof(int)*n);
 }
 
 bool hasEnding (std::string const &fullString, std::string const &ending) {
@@ -180,4 +182,41 @@ int SYCL_CSR_Graph::loadGalois(string filename) {
     munmap(base, statbuf.st_size);
     close(fd);
     return 1;
+}
+
+SYCL_CSR_Graph * SYCL_CSR_Graph::flip() {
+    SYCL_CSR_Graph * g = new SYCL_CSR_Graph();
+    g->numNodes = this->numNodes;
+    g->numEdges = this->numEdges;
+    g->allocateArrays();
+    
+    int i, node, edge;
+    
+    // First, initialize the degrees
+    for (node = this->start(); node < this->end(); node++) {
+        for (edge = this->getEdgeStart(node); edge < this->getEdgeEnd(node); edge++) {
+            int dst = this->getEdgeDst(edge);
+            g->nodeDegree[dst]++;
+        }
+    }
+
+    // Populate nodePtr
+    for (i = 0; i < g->numNodes; i++) g->nodePtr[i+1] = g->nodePtr[i] + g->nodeDegree[i];
+
+    // Create a temporary array to keep track of how many nodes we've added to the '
+    int* counts = (int*)malloc(sizeof(int)*g->numNodes);
+    memset(counts, 0, sizeof(int)*g->numNodes);
+
+    // Now, we have everything in place to actually flip the edges
+    for (node = this->start(); node < this->end(); node++) {
+        for (edge = this->getEdgeStart(node); edge < this->getEdgeEnd(node); edge++) {
+            int dst = this->getEdgeDst(edge);
+            g->data[g->nodePtr[dst]+counts[dst]] = node;
+            counts[dst]++;
+        }
+    }
+
+    free(counts);
+
+    return g;
 }

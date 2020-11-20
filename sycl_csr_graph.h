@@ -66,7 +66,9 @@ public:
         return data[edge];
     }
 
-protected:
+    // Flip the directions of the edges and return a new graph
+    // This is needed for easy pull-based PageRank
+    SYCL_CSR_Graph* flip();
 
     // Array containing the out degrees for each node
     int* nodeDegree;
@@ -79,6 +81,8 @@ protected:
     // Contains the 'destinations' of the edges
     // For PageRank and BFS, we don't care about edge weights
     int* data;
+
+protected:
 
     // Allocate memory for the graph
     // Must be called after the number of edges and nodes are known
