@@ -303,8 +303,8 @@ int main (int argc, char** argv)
 
     SYCL_CSR_Graph* f = new SYCL_CSR_Graph();
     f->load(argv[1]);
-    scalar_csr(f);
-    //adaptive_csr(f);
+    //scalar_csr(f);
+    adaptive_csr(f);
 
     delete f;
     return 0;
