@@ -13,6 +13,7 @@ public:
 
     int numNodes;
     int numEdges;
+    
 
     SYCL_CSR_Graph() {
         this->numNodes = this->numEdges = 0;

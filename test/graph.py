@@ -54,12 +54,13 @@ else:
                     edge_map.append((x,edge_dst))
 
 #check for edge duplicate
-'''
+final_edge_map=[]
 for (x,y) in edge_map:
-    if((y,x) in edge_map):
-        print("duplicate")
-'''
-for (x,y) in edge_map:
+    final_edge_map.append((x-1, y-1))
+    final_edge_map.append((y-1, x-1))
+    
+
+for (x,y) in final_edge_map:
     f.write(str(x))
     f.write(" ")
     f.write(str(y))
