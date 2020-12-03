@@ -5,9 +5,9 @@
 #include "sycl_csr_graph.h"
 
 #define ALPHA 0.85
-#define EPSILON 0.000001
+//#define EPSILON 0.000001
+#define EPSILON 0.001
 
-#define BLOCK_OFFSET_MASK 0xfff
 #define MAX_WGROUP_BLOCKS 100
 
 #define SCALE_FACTOR 0x100000
@@ -39,6 +39,19 @@ template<typename T> void print_array(T* arr, int size) {
         }
     }
     std::cout << endl;
+}
+
+void check_dups(int * arr, int size, int max_el) {
+    int * marks = (int*)malloc(max_el*sizeof(int));
+    memset(marks, 0, max_el*sizeof(int));
+    for (int i = 0; i < size; i++) {
+        if (marks[arr[i]]) {
+            std::cout << "Element " << arr[i] << " occurs at positions " << marks[arr[i]]-1 << " and " << i << std::endl;
+            break;
+        }
+        marks[arr[i]] = i+1;
+    }
+    free(marks);
 }
 
 // Exploratory code to determine what is possible with SYCL atomics
@@ -84,8 +97,9 @@ void push_based_pagerank(SYCL_CSR_Graph * g, sycl::device device, sycl::queue qu
     int n = g->numNodes;
 
     // Initialize worklists
-    int * in_wl = (int*)malloc(n*sizeof(int));
-    int * out_wl = (int*)malloc(n*sizeof(int));
+    int max_wl_size = 2*n;
+    int * in_wl = (int*)malloc(max_wl_size*sizeof(int));
+    int * out_wl = (int*)malloc(max_wl_size*sizeof(int));
 
     int heap_block_size = wgroup_size;
     // The 2 is a safety factor
@@ -97,10 +111,13 @@ void push_based_pagerank(SYCL_CSR_Graph * g, sycl::device device, sycl::queue qu
     int * heap = (int*)malloc(heap_size*sizeof(int));
     // If a work-group needs extra blocks, we mark the 'excess nodes' with their offsets
     extra_point * extra_mask = (extra_point*)malloc(n*sizeof(extra_point));
+    int * dup_mask = (int*)malloc(n*sizeof(int));
+    
 
-    memset(out_wl, 0, n * sizeof(int));
-    memset(in_wl, 0, n * sizeof(int));
+    memset(out_wl, 0, max_wl_size * sizeof(int));
+    memset(in_wl, 0, max_wl_size * sizeof(int));
     memset(extra_mask, 0, n*sizeof(extra_point));
+    memset(dup_mask, 0, n*sizeof(int));
 
     int i;
     for (i = 0; i < n; i++) {
@@ -125,7 +142,6 @@ void push_based_pagerank(SYCL_CSR_Graph * g, sycl::device device, sycl::queue qu
 
     // SYCL scope
     {
-        int wl_size = n;
 
         // Buffers for residuals & weights
         sycl::buffer<unsigned int, 1> res_buf(residuals, sycl::range<1>(n));
@@ -135,13 +151,18 @@ void push_based_pagerank(SYCL_CSR_Graph * g, sycl::device device, sycl::queue qu
         sycl::buffer<int, 1> nodePtr_buf(g->nodePtr, sycl::range<1>(n+1));
         sycl::buffer<int, 1> edgeDst_buf(g->data, sycl::range<1>(g->numEdges));
         // Worklist related buffers
-        sycl::buffer<int, 1> in_wl_buf(in_wl, sycl::range<1>(n));
-        sycl::buffer<int, 1> out_wl_buf(out_wl, sycl::range<1>(n));
+        sycl::buffer<int, 1> in_wl_buf(in_wl, sycl::range<1>(max_wl_size));
+        sycl::buffer<int, 1> out_wl_buf(out_wl, sycl::range<1>(max_wl_size));
         sycl::buffer<int, 1> heap_buf(heap, sycl::range<1>(heap_size));
         sycl::buffer<extra_point, 1> extra_buf(extra_mask, sycl::range<1>(n));
+        sycl::buffer<int, 1> dup_buf(dup_mask, sycl::range<1>(n));
 
-        for (int j = 0; j < 10; j++) {
+        int wl_size = n;
+        int max_its = 1;
+        for (int j = 0; j < max_its; j++) {
         // Begin counter scope
+        if (!wl_size) break;
+
         {
         auto n_wgroups = ((wl_size+wgroup_size-1) / wgroup_size);
         // Initially, each work group has its own block of memory
@@ -157,14 +178,16 @@ void push_based_pagerank(SYCL_CSR_Graph * g, sycl::device device, sycl::queue qu
             auto nodePtr = nodePtr_buf.get_access<sycl::access::mode::read>(cgh);
             auto edgeDst = edgeDst_buf.get_access<sycl::access::mode::read>(cgh);
             // read-write
-            auto residuals = res_buf.get_access<sycl::access::mode::atomic>(cgh);
             auto weights = weight_buf.get_access<sycl::access::mode::read_write>(cgh);
             auto in_wl = in_wl_buf.get_access<sycl::access::mode::read_write>(cgh);
             auto out_wl = out_wl_buf.get_access<sycl::access::mode::read_write>(cgh);
             auto heap = heap_buf.get_access<sycl::access::mode::read_write>(cgh);
             auto extra = extra_buf.get_access<sycl::access::mode::read_write>(cgh);
-            // counters
+            //atomic
+            auto residuals = res_buf.get_access<sycl::access::mode::atomic>(cgh);
+            auto dup_mask = dup_buf.get_access<sycl::access::mode::atomic>(cgh);
 
+            // counters
             auto counter = counter_buf.get_access<sycl::access::mode::atomic>(cgh);
 
                 sycl::accessor
@@ -202,19 +225,25 @@ void push_based_pagerank(SYCL_CSR_Graph * g, sycl::device device, sycl::queue qu
                     item.barrier(sycl::access::fence_space::local_space);
 
                     for (auto i = global_id; i < (group_id+1)*wgroup_size; i += wgroup_size) {
-                        if (i < wl_size) {
+                        int have_work = (i < wl_size);
+                        int node;
+                        if (have_work) {
+                            node = in_wl[i];
+                            //if (dup_mask[node].fetch_add(1)) have_work = 0;
+                        }
 
-                        auto node = in_wl[i];
+                        if (have_work) {
                         unsigned int old_res = sycl::atomic_fetch_and(residuals[node], (unsigned int)0);
 
-                        weights[node] += old_res;
+                        weights[node] += ((float)old_res) / SCALE_FACTOR;
                         unsigned int update = old_res * ALPHA / deg[node];
                         for (auto j = nodePtr[node]; j < nodePtr[node+1]; j++) {
                             auto dst = edgeDst[j];
                             //float old_other_res = sycl::atomic_fetch_add(residuals[dst], (float)update);
                             unsigned int old_other_res = residuals[dst].fetch_add(update);
-                            if (old_other_res < SCALE_FACTOR*EPSILON && old_other_res + update > SCALE_FACTOR*EPSILON) {
-                                
+                            if (old_other_res < SCALE_FACTOR*EPSILON && old_other_res + update >= SCALE_FACTOR*EPSILON) {
+                                // Don't add to the worklist if we've already processed it
+                                //if (dup_mask[dst].fetch_add(1)) continue;
                                 // Need to increment the local offset counter
                                 unsigned int old_offset = sycl::atomic_fetch_add(local_counters[0], (unsigned int)1);
                                 unsigned int allocated_blocks = local_counters[1].load() + 1;
@@ -248,8 +277,7 @@ void push_based_pagerank(SYCL_CSR_Graph * g, sycl::device device, sycl::queue qu
 
                         // sync threads
                         item.barrier(sycl::access::fence_space::global_and_local);
-                        if (i < wl_size) {
-                            auto node = in_wl[i];
+                        if (have_work) {
                             for (auto j = nodePtr[node]; j < nodePtr[node+1]; j++) {
                                 auto dst = edgeDst[j];
                                 extra_point tmp = extra[dst];
@@ -291,15 +319,30 @@ void push_based_pagerank(SYCL_CSR_Graph * g, sycl::device device, sycl::queue qu
             );
 
         });
+
+        if (j < max_its - 1) {
+        queue.submit([&] (sycl::handler& cgh) {
+                auto in_wl = in_wl_buf.get_access<sycl::access::mode::read>(cgh);
+                auto dup_mask = dup_buf.get_access<sycl::access::mode::read_write>(cgh);
+
+                cgh.parallel_for<class clear_dup_mask>(
+                    sycl::range<1>(wl_size),
+                    [=] (sycl::item<1> item) {
+                        size_t id = item.get_linear_id();
+                        dup_mask[in_wl[id]] = 0;
+                    }
+                );
+
+        });}
         queue.wait_and_throw();
         } // end counter scope to force copy back to device
         std::cout << "Completed " << j+1 << " iterations" << std::endl;
         std::cout << "Heap counter " << counters[0] << std::endl;
         std::cout << "Out worklist size " << counters[1] << std::endl;
         wl_size = counters[1];
-        auto tmp = in_wl;
-        in_wl = out_wl;
-        out_wl = tmp;
+        auto tmp = in_wl_buf;
+        in_wl_buf = out_wl_buf;
+        out_wl_buf = tmp;
         }
 
     }
@@ -311,6 +354,10 @@ void push_based_pagerank(SYCL_CSR_Graph * g, sycl::device device, sycl::queue qu
 //    std::cout << "Out worklist size " << counters[1] << std::endl;
     std::cout << "Out worklist: ";
     print_array(out_wl, counters[1]);
+    check_dups(out_wl, counters[1], n);
+
+    std::cout << "Dup mask: " << std::endl;
+    print_array(dup_mask, n);
 
     free(in_wl);
     free(residuals);
@@ -341,7 +388,7 @@ int main (int argc, char** argv)
     try {
  //       atomic_experiments(device, queue);
         push_based_pagerank(&g, device, queue);
-    } catch (sycl::compile_program_error& e) {
+    } catch (sycl::exception& e) {
         std::cout << e.what() << std::endl;
     }
     return 0;
