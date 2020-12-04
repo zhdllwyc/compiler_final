@@ -129,9 +129,9 @@ void push_based_pagerank(SYCL_CSR_Graph * g, sycl::device device, sycl::queue qu
     // Initialize residuals and weights
     // We have to use longs for residuals because SYCL doesn't support atomic_add on floats :-(
     unsigned int * residuals = (unsigned int*)malloc(n*sizeof(unsigned int));
+    memset(residuals, 0, n*sizeof(unsigned int));
     float * weights = (float*)malloc(n*sizeof(float));
     for (i = 0; i < n; i++) {
-        residuals[i] = 0;
         weights[i] = 1-ALPHA;
         int degree = g->getOutDegree(i);
         for (int edge = g->getEdgeStart(i); edge < g->getEdgeEnd(i); edge++) {
