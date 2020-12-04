@@ -142,7 +142,7 @@ void push_based_pagerank(SYCL_CSR_Graph * g, sycl::device device, sycl::queue qu
     stats.checkpoint("preprocessing");
     int counters[] = {0,0};
 
-    int j;
+    int iter;
     // SYCL scope
     {
 
@@ -162,7 +162,7 @@ void push_based_pagerank(SYCL_CSR_Graph * g, sycl::device device, sycl::queue qu
 
         int wl_size = n;
         int max_its = 200;
-        for (j = 0; j < max_its; j++) {
+        for (iter = 0; iter < max_its; iter++) {
         // Begin counter scope
         if (!wl_size) break;
 
@@ -250,7 +250,7 @@ void push_based_pagerank(SYCL_CSR_Graph * g, sycl::device device, sycl::queue qu
                         unsigned int old_other_res = residuals[dst].fetch_add(update);
                         if (old_other_res < SCALE_FACTOR*EPSILON && old_other_res + update >= SCALE_FACTOR*EPSILON) {
                             // Don't add to the worklist if we've already processed it
-                            if (dup_mask[dst].fetch_add(1)) {
+                            if (dup_mask[dst].fetch_max(iter+1) == iter+1) {
                                 //dup_mask[0].fetch_add(1);
                                 continue;
                             }
@@ -331,23 +331,9 @@ void push_based_pagerank(SYCL_CSR_Graph * g, sycl::device device, sycl::queue qu
 
         });
 
-        if (j < max_its - 1) {
-        queue.submit([&] (sycl::handler& cgh) {
-                auto in_wl = in_wl_buf.get_access<sycl::access::mode::read>(cgh);
-                auto dup_mask = dup_buf.get_access<sycl::access::mode::read_write>(cgh);
-
-                cgh.parallel_for<class clear_dup_mask>(
-                    sycl::range<1>(wl_size),
-                    [=] (sycl::item<1> item) {
-                        size_t id = item.get_linear_id();
-                        dup_mask[in_wl[id]] = 0;
-                    }
-                );
-
-        });}
         queue.wait_and_throw();
         } // end counter scope to force copy back to device
-        std::cout << "Completed " << j+1 << " iterations" << std::endl;
+        std::cout << "Completed " << iter+1 << " iterations" << std::endl;
         std::cout << "Heap counter " << counters[0] << std::endl;
         std::cout << "Out worklist size " << counters[1] << std::endl;
         stats.add_datapoint("heap_counter", counters[0]);
@@ -369,16 +355,8 @@ void push_based_pagerank(SYCL_CSR_Graph * g, sycl::device device, sycl::queue qu
 //    check_dups(out_wl, counters[1], n);
 //    check_dups(heap, heap_size, n);
 
-    /*std::cout << "Dup mask: " << std::endl;
-    print_array(dup_mask, n);
-    for (i = 0; i < n; i++) {
-        if (dup_mask[i] > 1) {
-            std::cout << i << std::endl;
-            break;
-        }
-    }*/
 
-    stats.add_stat("iterations", j);
+    stats.add_stat("iterations", iter);
     stats.checkpoint("pagerank");
     std::cout << "Weights before normalization: ";
     print_array(weights, n);

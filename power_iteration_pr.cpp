@@ -155,29 +155,18 @@ int computeRowBlocks(int * row_lengths, int num_rows, int num_nonzero, int block
     int max_blocks = (num_nonzero+block_size-1) / block_size + 1;
     int * p = (int*)malloc(sizeof(int)*max_blocks*2);
 
-    int size = 0;
-    int block_num = 0;
+    int size = row_lengths[0];
+    int block_num = 1;
     p[0] = 0;
-    for (int i = 0; i < num_rows; i++) {
-        // Fat row - we put it in its own block
-        if (row_lengths[i] >= block_size) {
-            if (size) block_num++;
+    for (int i = 1; i < num_rows; i++) {
+        if (size + row_lengths[i] > block_size) {
             p[block_num] = i;
             block_num++;
-            size = 0;
-            continue;
-        }
-        else if (size + row_lengths[i] > block_size) {
-            // If we had a block accruing before-hand, advance to a new one
-            if (size) block_num++;
-            // Reset the size and start a new block
             size = row_lengths[i];
-            p[block_num] = i;
         }
         else size += row_lengths[i];
     }
 
-    if (size) block_num++;
     p[block_num] = num_rows;
 
     // return the pointer
@@ -243,10 +232,10 @@ void adaptive_csr(SYCL_CSR_Graph * f, int max_iters=MAX_ITERS)
     // Try using twice the work group size for the number of nonzeros
     int num_blocks = computeRowBlocks(g->nodeDegree, n, m, block_size, &rowBlocks);
     stats.checkpoint("preprocessing");
-    /*std::cout << "Number of blocks " << num_blocks << std::endl;
+    std::cout << "Number of blocks " << num_blocks << std::endl;
     std::cout << "Block bounds: ";
     print_array(rowBlocks, num_blocks);
-    std:cout << "First block nonzeros: " << g->nodePtr[rowBlocks[1]] - g->nodePtr[rowBlocks[0]] << std::endl;*/
+    std:cout << "First block nonzeros: " << g->nodePtr[rowBlocks[1]] - g->nodePtr[rowBlocks[0]] << std::endl;
 
     // Begin C scope to enable nice SYCL memory management
     {
@@ -405,6 +394,7 @@ void adaptive_csr(SYCL_CSR_Graph * f, int max_iters=MAX_ITERS)
                 queue.wait_and_throw();
             } catch (const cl::sycl::exception& e) {
                 std::cout << e.what() << std::endl;
+                break;
             }
 
             auto tmp = res_buf;
@@ -420,7 +410,6 @@ void adaptive_csr(SYCL_CSR_Graph * f, int max_iters=MAX_ITERS)
             }
             // Reset flag for next iteration
             error_violated = 0;
-            
         }
     }
 
