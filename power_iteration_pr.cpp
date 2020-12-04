@@ -3,14 +3,16 @@
 #include <cassert>
 #include <CL/sycl.hpp>
 #include "sycl_csr_graph.h"
+#include "stats.h"
 
 #define ALPHA 0.85
 #define EPSILON 0.000001
-#define MAX_ITERS 52
+#define MAX_ITERS 200
 
 // PageRank with power iteration in SYCL
 // This code is intended as a benchmark to test other (hopefully faster) algos against
 
+Stats stats;
 namespace sycl = cl::sycl;
 
 void normalize_weights(float * weights, int n) {
@@ -67,11 +69,14 @@ void scalar_csr(SYCL_CSR_Graph * f, int max_iters=MAX_ITERS)
        throw "Device doesn't have enough local memory!";
     }
 
+    stats.checkpoint("load");
+
     float * residuals = (float*)malloc(g->numNodes*sizeof(float));
     float * next_residuals = (float*)malloc(g->numNodes*sizeof(float));
     for (int i = 0; i < g->numNodes; i++) residuals[i] = 1-ALPHA;
 
     int n = g->numNodes;
+    int error_violated = 0;
 
     // Begin C scope to enable nice SYCL memory management
     {
@@ -84,12 +89,16 @@ void scalar_csr(SYCL_CSR_Graph * f, int max_iters=MAX_ITERS)
         sycl::buffer<int, 1> edgeDst_buf(g->data, sycl::range<1>(g->numEdges));
 
         for (int iter = 0; iter < max_iters; iter++) {
+            // begin scope for flag
+            {
+            sycl::buffer<int, 1> err_buf(&error_violated, sycl::range<1>(1));
             queue.submit([&] (sycl::handler& cgh) {
                 auto deg = deg_buf.get_access<sycl::access::mode::read>(cgh);
                 auto nodePtr = nodePtr_buf.get_access<sycl::access::mode::read>(cgh);
                 auto edgeDst = edgeDst_buf.get_access<sycl::access::mode::read>(cgh);
                 auto res = res_buf.get_access<sycl::access::mode::read>(cgh);
                 auto next = next_buf.get_access<sycl::access::mode::read_write>(cgh);
+                auto err_violated = err_buf.get_access<sycl::access::mode::read_write>(cgh);
 
                 cgh.parallel_for<class pagerank_iter>(
                     sycl::range<1>(n),
@@ -100,7 +109,10 @@ void scalar_csr(SYCL_CSR_Graph * f, int max_iters=MAX_ITERS)
                             auto src = edgeDst[i];
                             sum += res[src]/deg[src];
                         }
-                        next[id] = ALPHA * sum + (1-ALPHA);
+                        float tmp = ALPHA * sum + (1-ALPHA);
+                        next[id] = tmp;
+                        float diff = res[id] - tmp;
+                        if (diff > EPSILON || -diff > EPSILON) err_violated[0] = 1;
                     }
                 );
 
@@ -109,12 +121,25 @@ void scalar_csr(SYCL_CSR_Graph * f, int max_iters=MAX_ITERS)
             auto tmp = res_buf;
             res_buf = next_buf;
             next_buf = tmp;
+            } // end scope for flag
+
+            if (!error_violated) {
+                stats.add_stat("iterations", iter+1);
+                stats.checkpoint("pagerank");
+                cout << "PageRank converged after " << iter+1 << " iterations" << endl;
+                break;
+            }
+            // Reset flag for next iteration
+            error_violated = 0;
         }
     }
+
 
     cout << "PageRank weights before normalization: " << endl;
     print_array(next_residuals, n);
     normalize_weights(next_residuals, n);
+    stats.checkpoint("normalize");
+    stats.stop();
     cout << "PageRank weights after normalization: " << endl;
     print_array(next_residuals, n);
 
@@ -199,11 +224,14 @@ void adaptive_csr(SYCL_CSR_Graph * f, int max_iters=MAX_ITERS)
     std::cout << "Local mem size " << local_mem_size << std::endl;
 
     int block_size = (int)2*wgroup_size;
+    //int block_size = 4*wgroup_size;
 
     if (!has_local_mem || local_mem_size < (block_size * sizeof(float)))
     {
        throw "Device doesn't have enough local memory!";
     }
+
+    stats.checkpoint("load");
 
     float * residuals = (float*)malloc(g->numNodes*sizeof(float));
     float * next_residuals = (float*)malloc(g->numNodes*sizeof(float));
@@ -214,10 +242,11 @@ void adaptive_csr(SYCL_CSR_Graph * f, int max_iters=MAX_ITERS)
     int * rowBlocks;
     // Try using twice the work group size for the number of nonzeros
     int num_blocks = computeRowBlocks(g->nodeDegree, n, m, block_size, &rowBlocks);
-    std::cout << "Number of blocks " << num_blocks << std::endl;
+    stats.checkpoint("preprocessing");
+    /*std::cout << "Number of blocks " << num_blocks << std::endl;
     std::cout << "Block bounds: ";
     print_array(rowBlocks, num_blocks);
-    std:cout << "First block nonzeros: " << g->nodePtr[rowBlocks[1]] - g->nodePtr[rowBlocks[0]] << std::endl;
+    std:cout << "First block nonzeros: " << g->nodePtr[rowBlocks[1]] - g->nodePtr[rowBlocks[0]] << std::endl;*/
 
     // Begin C scope to enable nice SYCL memory management
     {
@@ -230,7 +259,12 @@ void adaptive_csr(SYCL_CSR_Graph * f, int max_iters=MAX_ITERS)
         sycl::buffer<int, 1> edgeDst_buf(g->data, sycl::range<1>(m));
         sycl::buffer<int, 1> rowBlocks_buf(rowBlocks, sycl::range<1>(num_blocks));
 
+        int error_violated = 0;
+
         for (int iter = 0; iter < max_iters; iter++) {
+            // begin scope for flag
+            {
+            sycl::buffer<int, 1> err_buf(&error_violated, sycl::range<1>(1));
             queue.submit([&] (sycl::handler& cgh) {
                 auto deg = deg_buf.get_access<sycl::access::mode::read>(cgh);
                 auto nodePtr = nodePtr_buf.get_access<sycl::access::mode::read>(cgh);
@@ -238,6 +272,7 @@ void adaptive_csr(SYCL_CSR_Graph * f, int max_iters=MAX_ITERS)
                 auto res = res_buf.get_access<sycl::access::mode::read>(cgh);
                 auto rowBlocks = rowBlocks_buf.get_access<sycl::access::mode::read>(cgh);
                 auto next = next_buf.get_access<sycl::access::mode::read_write>(cgh);
+                auto err_violated = err_buf.get_access<sycl::access::mode::read_write>(cgh);
 
                 sycl::accessor
                     <float,
@@ -258,6 +293,7 @@ void adaptive_csr(SYCL_CSR_Graph * f, int max_iters=MAX_ITERS)
                         int block_data_begin = nodePtr[first_node];
                         int nnz = nodePtr[last_node] - block_data_begin;
                         int i;
+
                         // more than one node in the block
                         // we need to apply CSR-stream
                         if (last_node-first_node > 1) {
@@ -312,7 +348,11 @@ void adaptive_csr(SYCL_CSR_Graph * f, int max_iters=MAX_ITERS)
                                 
                             }
 
-                            if (thread_in_block == 0 && local_node < last_node) next[local_node] = sum * ALPHA + (1-ALPHA);
+                            if (thread_in_block == 0 && local_node < last_node) {
+                                float tmp = next[local_node] = ALPHA * sum + (1-ALPHA);
+                                float diff = tmp - res[local_node];
+                                if (diff > EPSILON || -diff > EPSILON) err_violated[0] = 1;
+                                }
                             }
 
                         // reduce each row with a single thread
@@ -322,7 +362,10 @@ void adaptive_csr(SYCL_CSR_Graph * f, int max_iters=MAX_ITERS)
                                 for (int j = nodePtr[local_node]-block_data_begin; j < nodePtr[local_node+1] - block_data_begin; j++) {
                                     sum += local_mem[j];
                                 }
-                                next[local_node] = ALPHA * sum + (1-ALPHA);
+
+                                float tmp = next[local_node] = ALPHA * sum + (1-ALPHA);
+                                float diff = tmp - res[local_node];
+                                if (diff > EPSILON || -diff > EPSILON) err_violated[0] = 1;
                             }
                             //if (group_id == num_blocks-1) next[n-1] = 3;
                         }
@@ -348,16 +391,36 @@ void adaptive_csr(SYCL_CSR_Graph * f, int max_iters=MAX_ITERS)
                             if (use_result) local_mem[local_id] = sum;                    
                            }
                            // save result
-                           if (local_id == 0) next[first_node] = ALPHA * sum + (1-ALPHA) * sum;
+                           if (local_id == 0) {
+                                float tmp = next[first_node] = ALPHA * sum + (1-ALPHA);
+                                float diff = tmp - res[first_node];
+                                if (diff > EPSILON || -diff > EPSILON) err_violated[0] = 1;
+                           }
                         }
                     }
                 );
 
             });
-            queue.wait_and_throw();
+            try {
+                queue.wait_and_throw();
+            } catch (const cl::sycl::exception& e) {
+                std::cout << e.what() << std::endl;
+            }
+
             auto tmp = res_buf;
             res_buf = next_buf;
             next_buf = tmp;
+            } // end scope for flag
+
+            if (!error_violated) {
+                stats.add_stat("iterations", iter+1);
+                stats.checkpoint("pagerank");
+                cout << "PageRank converged after " << iter+1 << " iterations" << endl;
+                break;
+            }
+            // Reset flag for next iteration
+            error_violated = 0;
+            
         }
     }
 
@@ -365,6 +428,9 @@ void adaptive_csr(SYCL_CSR_Graph * f, int max_iters=MAX_ITERS)
     cout << "PageRank weights before normalization: " << endl;
     print_array(next_residuals, n);
     normalize_weights(next_residuals, n);
+    stats.checkpoint("normalize");
+    stats.stop();
+
     cout << "PageRank weights after normalization: " << endl;
     print_array(next_residuals, n);
 
@@ -378,30 +444,35 @@ int main (int argc, char** argv)
 {
 
     if (argc < 2) {
-        std::cout << "Missing input graph filename." << std::endl;
+        std::cout << "Usage graphfile [algo] [statsoutput]" << std::endl;
         return 1;
     }
 
     char algo = (argc >= 3) ? argv[2][0] : 'a';
-    int max_iters = (argc >= 4) ? atoi(argv[3]) : MAX_ITERS;
 
+    stats.start();
     SYCL_CSR_Graph* f = new SYCL_CSR_Graph();
     f->load(argv[1]);
     switch (algo) {
         case 'a':
             std::cout << "Running adaptive CSR" << std::endl;
-            adaptive_csr(f, max_iters);
+            adaptive_csr(f);
             break;
         case 's':
             std::cout << "Running scalar CSR" << std::endl;
-            scalar_csr(f, max_iters);
+            scalar_csr(f);
             break;
         default:
             std::cout << "Unrecognized algorithm: " << algo << std::endl;
-            break;
+            return 1;
     }
 
     delete f;
+
+    if (argc >= 4) {
+        stats.json_dump(argv[3]);
+    }
+
     return 0;
 }
 
