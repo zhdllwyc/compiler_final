@@ -12,7 +12,7 @@ int main(int argc, const char ** argv) {
     g.load(argv[1]);
 
     float * weights;
-    int nits = serialPageRank(&g, &weights, 0.85, 0.0001);
+    int nits = serialPageRank(&g, &weights, 0.85, 0.000001);
     cout << "PageRank converged after " << nits << " iterations" << endl;
     cout << "PageRank weights: " << endl;
     for (int i = 0; i < g.numNodes; i++) {
