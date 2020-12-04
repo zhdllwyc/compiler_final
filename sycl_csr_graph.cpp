@@ -98,10 +98,13 @@ int SYCL_CSR_Graph::loadTxt(string filename) {
     }
 
     this->allocateArrays();
-
+    int max_degree = edgeLists[0]->size();
     for (i = 0; i < n; i++) {
         sort(edgeLists[i]->begin(), edgeLists[i]->end());
         int outDegree = this->nodeDegree[i] = edgeLists[i]->size();
+        if(max_degree<outDegree){
+            max_degree = outDegree;
+        }
         int offset = this->nodePtr[i];
         this->nodePtr[i+1] = offset + outDegree;
 
@@ -111,7 +114,7 @@ int SYCL_CSR_Graph::loadTxt(string filename) {
 
         delete edgeLists[i];
     }
-
+    this->max_outdegree = max_degree;
     free(edgeLists);
 
     return 1;
@@ -174,10 +177,14 @@ int SYCL_CSR_Graph::loadGalois(string filename) {
         uint64_t* edgeArray = data + this->numNodes;
         for (i = 0; i < this->numEdges; i++) this->data[i] = edgeArray[i];
     }
-
+    int max_degree = this->nodePtr[1] - this->nodePtr[0];
     for (i = 0; i < this->numNodes; i++) {
         this->nodeDegree[i] = this->nodePtr[i+1] - this->nodePtr[i];
+        if(max_degree < this->nodeDegree[i]){
+            max_degree = this->nodeDegree[i];
+        }
     }
+    this->max_outdegree = max_degree;
 
     munmap(base, statbuf.st_size);
     close(fd);

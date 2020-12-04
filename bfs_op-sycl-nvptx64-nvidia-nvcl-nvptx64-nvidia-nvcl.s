@@ -9,100 +9,95 @@
 	// .globl	SYCL_class_bfs_OP // -- Begin function SYCL_class_bfs_OP
                                         // @SYCL_class_bfs_OP
 .entry SYCL_class_bfs_OP(
-	.param .u64 SYCL_class_bfs_OP_param_0,
+	.param .u64 .ptr .global .align 4 SYCL_class_bfs_OP_param_0,
 	.param .u64 .ptr .global .align 4 SYCL_class_bfs_OP_param_1,
 	.param .u64 .ptr .global .align 4 SYCL_class_bfs_OP_param_2,
-	.param .u64 .ptr .global .align 4 SYCL_class_bfs_OP_param_3,
-	.param .u64 SYCL_class_bfs_OP_param_4,
-	.param .u32 SYCL_class_bfs_OP_param_5,
+	.param .u32 SYCL_class_bfs_OP_param_3,
+	.param .u64 .ptr .global .align 4 SYCL_class_bfs_OP_param_4,
+	.param .u64 .ptr .global .align 4 SYCL_class_bfs_OP_param_5,
 	.param .u64 .ptr .global .align 4 SYCL_class_bfs_OP_param_6,
 	.param .u64 .ptr .global .align 4 SYCL_class_bfs_OP_param_7,
 	.param .u64 .ptr .global .align 4 SYCL_class_bfs_OP_param_8,
-	.param .u64 .ptr .global .align 4 SYCL_class_bfs_OP_param_9,
-	.param .u64 .ptr .global .align 4 SYCL_class_bfs_OP_param_10,
-	.param .u64 .ptr .global .align 4 SYCL_class_bfs_OP_param_11
+	.param .u64 .ptr .global .align 4 SYCL_class_bfs_OP_param_9
 )
 {
-	.reg .pred 	%p<8>;
-	.reg .b32 	%r<22>;
-	.reg .b64 	%rd<40>;
+	.reg .pred 	%p<6>;
+	.reg .b32 	%r<24>;
+	.reg .b64 	%rd<35>;
 
 // %bb.0:
 	ld.param.u64 	%rd16, [SYCL_class_bfs_OP_param_0];
 	ld.param.u64 	%rd17, [SYCL_class_bfs_OP_param_1];
 	mov.u32 	%r8, %ctaid.x;
 	ld.param.u64 	%rd18, [SYCL_class_bfs_OP_param_2];
-	mov.u32 	%r9, %tid.x;
-	cvt.u64.u32 	%rd19, %r9;
-	ld.param.u64 	%rd20, [SYCL_class_bfs_OP_param_3];
-	cvt.u64.u32 	%rd21, %r8;
-	ld.param.u64 	%rd22, [SYCL_class_bfs_OP_param_4];
-	mul.lo.s64 	%rd23, %rd21, %rd16;
-	ld.param.s32 	%rd24, [SYCL_class_bfs_OP_param_5];
-	add.s64 	%rd1, %rd23, %rd19;
-	shl.b64 	%rd25, %rd1, 2;
-	add.s64 	%rd26, %rd17, %rd25;
-	st.global.u32 	[%rd26], %rd1;
-	add.s64 	%rd27, %rd18, %rd25;
-	st.global.u32 	[%rd27], %r8;
-	add.s64 	%rd28, %rd20, %rd25;
-	st.global.u32 	[%rd28], %r9;
-	setp.ge.u64 	%p1, %rd21, %rd22;
-	setp.ge.u64 	%p2, %rd1, %rd24;
-	or.pred  	%p3, %p1, %p2;
-	@%p3 bra 	LBB0_7;
+	mov.u32 	%r9, %ntid.x;
+	ld.param.s32 	%rd19, [SYCL_class_bfs_OP_param_3];
+	mov.u32 	%r10, %tid.x;
+	mad.lo.s32 	%r11, %r9, %r8, %r10;
+	cvt.u64.u32 	%rd1, %r11;
+	mul.wide.u32 	%rd20, %r11, 4;
+	add.s64 	%rd21, %rd16, %rd20;
+	st.global.u32 	[%rd21], %r11;
+	add.s64 	%rd22, %rd17, %rd20;
+	st.global.u32 	[%rd22], %r8;
+	add.s64 	%rd23, %rd18, %rd20;
+	st.global.u32 	[%rd23], %r10;
+	setp.ge.u64 	%p1, %rd1, %rd19;
+	@%p1 bra 	LBB0_7;
 // %bb.1:
-	ld.param.u64 	%rd10, [SYCL_class_bfs_OP_param_6];
-	add.s64 	%rd2, %rd10, %rd25;
-	ld.global.u32 	%r10, [%rd2];
-	setp.ne.s32 	%p4, %r10, 1;
-	@%p4 bra 	LBB0_7;
+	ld.param.u64 	%rd10, [SYCL_class_bfs_OP_param_4];
+	shl.b64 	%rd24, %rd1, 2;
+	add.s64 	%rd2, %rd10, %rd24;
+	ld.global.u32 	%r12, [%rd2];
+	setp.ne.s32 	%p2, %r12, 1;
+	@%p2 bra 	LBB0_7;
 // %bb.2:
-	ld.param.u64 	%rd12, [SYCL_class_bfs_OP_param_8];
-	ld.param.u64 	%rd11, [SYCL_class_bfs_OP_param_7];
-	mov.u32 	%r11, 0;
-	st.global.u32 	[%rd2], %r11;
-	add.s64 	%rd31, %rd11, %rd25;
-	mov.u32 	%r12, 1;
-	st.global.u32 	[%rd31], %r12;
+	ld.param.u64 	%rd12, [SYCL_class_bfs_OP_param_6];
+	ld.param.u64 	%rd11, [SYCL_class_bfs_OP_param_5];
+	mov.u32 	%r13, 0;
+	st.global.u32 	[%rd2], %r13;
+	add.s64 	%rd26, %rd11, %rd24;
+	mov.u32 	%r14, 1;
+	st.global.u32 	[%rd26], %r14;
 	bar.sync 	0;
-	add.s64 	%rd3, %rd12, %rd25;
-	ld.global.u32 	%r20, [%rd3];
-	ld.global.u32 	%r21, [%rd3+4];
-	setp.ge.s32 	%p5, %r20, %r21;
-	@%p5 bra 	LBB0_7;
+	add.s64 	%rd3, %rd12, %rd24;
+	ld.global.u32 	%r22, [%rd3];
+	ld.global.u32 	%r23, [%rd3+4];
+	setp.ge.s32 	%p3, %r22, %r23;
+	@%p3 bra 	LBB0_7;
 // %bb.3:
-	ld.param.u64 	%rd15, [SYCL_class_bfs_OP_param_11];
-	ld.param.u64 	%rd14, [SYCL_class_bfs_OP_param_10];
-	ld.param.u64 	%rd13, [SYCL_class_bfs_OP_param_9];
-	cvt.s64.s32 	%rd4, %r20;
-	add.s64 	%rd5, %rd14, %rd25;
-	shl.b64 	%rd33, %rd4, 2;
-	add.s64 	%rd39, %rd13, %rd33;
+	ld.param.u64 	%rd15, [SYCL_class_bfs_OP_param_9];
+	ld.param.u64 	%rd14, [SYCL_class_bfs_OP_param_8];
+	ld.param.u64 	%rd13, [SYCL_class_bfs_OP_param_7];
+	cvt.s64.s32 	%rd4, %r22;
+	add.s64 	%rd5, %rd14, %rd24;
+	shl.b64 	%rd28, %rd4, 2;
+	add.s64 	%rd34, %rd13, %rd28;
 LBB0_4:                                 // =>This Inner Loop Header: Depth=1
-	ld.global.u32 	%r13, [%rd39];
-	mul.wide.s32 	%rd34, %r13, 4;
-	add.s64 	%rd35, %rd11, %rd34;
-	ld.global.u32 	%r14, [%rd35];
-	setp.ne.s32 	%p6, %r14, 0;
-	@%p6 bra 	LBB0_6;
+	ld.global.u32 	%r15, [%rd34];
+	mul.wide.s32 	%rd29, %r15, 4;
+	add.s64 	%rd30, %rd11, %rd29;
+	ld.global.u32 	%r16, [%rd30];
+	setp.ne.s32 	%p4, %r16, 0;
+	@%p4 bra 	LBB0_6;
 // %bb.5:                               //   in Loop: Header=BB0_4 Depth=1
-	cvt.s64.s32 	%rd8, %r13;
-	ld.global.u32 	%r15, [%rd5];
-	add.s32 	%r16, %r15, 1;
-	shl.b64 	%rd36, %rd8, 2;
-	add.s64 	%rd37, %rd14, %rd36;
-	st.global.u32 	[%rd37], %r16;
-	add.s64 	%rd38, %rd10, %rd36;
-	st.global.u32 	[%rd38], %r12;
-	st.global.u32 	[%rd15], %r11;
-	ld.global.u32 	%r21, [%rd3+4];
+	cvt.s64.s32 	%rd8, %r15;
+	ld.global.u32 	%r17, [%rd5];
+	add.s32 	%r18, %r17, 1;
+	shl.b64 	%rd31, %rd8, 2;
+	add.s64 	%rd32, %rd14, %rd31;
+	st.global.u32 	[%rd32], %r18;
+	add.s64 	%rd33, %rd10, %rd31;
+	st.global.u32 	[%rd33], %r14;
+	st.global.u32 	[%rd15], %r13;
+	ld.global.u32 	%r23, [%rd3+4];
 LBB0_6:                                 //   in Loop: Header=BB0_4 Depth=1
-	add.s32 	%r20, %r20, 1;
-	add.s64 	%rd39, %rd39, 4;
-	setp.lt.s32 	%p7, %r20, %r21;
-	@%p7 bra 	LBB0_4;
+	add.s32 	%r22, %r22, 1;
+	add.s64 	%rd34, %rd34, 4;
+	setp.lt.s32 	%p5, %r22, %r23;
+	@%p5 bra 	LBB0_4;
 LBB0_7:
+	bar.sync 	0;
 	ret;
                                         // -- End function
 }

@@ -13,10 +13,10 @@ public:
 
     int numNodes;
     int numEdges;
-    
+    int max_outdegree;    
 
     SYCL_CSR_Graph() {
-        this->numNodes = this->numEdges = 0;
+        this->numNodes = this->numEdges = this->max_outdegree= 0;
         this->nodeDegree = this->nodePtr = this->data = nullptr;        
     }
 

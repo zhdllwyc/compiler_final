@@ -95,12 +95,12 @@ int main (int argc, char** argv)
                         size_t global_id = item.get_global_linear_id();
                         size_t group_id = item.get_group_linear_id();
                         size_t local_id = item.get_local_linear_id();
-                        size_t index = wgroup_size*group_id+local_id;   
+                        size_t index = global_id;//wgroup_size*group_id+local_id;   
                         global_submit[index] = index;
                         group_submit[index] = group_id;             
                         local_submit[index] = local_id; 
-                        if (group_id >= n_wgroups) return;        
-                        if( index >=n) return;
+                        //if (group_id >= n_wgroups) return;        
+                        if( index <n){
                         
                         if(Frontier_submit[index] == 1){
                             Frontier_submit[index] =0;
@@ -117,25 +117,27 @@ int main (int argc, char** argv)
                             }
                             //item.barrier(sycl::access::fence_space::local_space);
                             
-                        }            
+                        } 
+                        }
+                        item.barrier(sycl::access::fence_space::global_and_local);           
                     }
                 );
            });
            queue.wait_and_throw();
-           std::cout << "Levels: " << std::endl;
+           /*std::cout << "Levels: " << std::endl;
            std::cout<<done[0]<<std::endl;
            for (int i = 0; i < n; i++) {
-               std::cout <<i <<": "<<  Level[i] << "\n ";
+               std::cout <<i <<": "<<  Level[i] << " "<< local[i]<<" "<<group[i]<<" "<<global[i]<< "\n ";
 
            }
-           std::cout<<std::endl;
+           std::cout<<std::endl;*/
     }
 
     }
 
     std::cout << "final Levels: " << std::endl;
     std::cout<<std::endl;
-    for (int i = 0; i < n; i++) {
+    for (int i = 0; i < 100; i++) {
        std::cout <<i <<": "<<  Level[i] << " "<< local[i]<<" "<<group[i]<<" "<<global[i]<< "\n ";
 
     }
