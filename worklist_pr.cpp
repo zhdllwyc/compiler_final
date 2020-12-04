@@ -3,6 +3,7 @@
 #include <cassert>
 #include <CL/sycl.hpp>
 #include "sycl_csr_graph.h"
+#include "stats.h"
 
 #define ALPHA 0.85
 #define EPSILON 0.000001
@@ -20,6 +21,8 @@ typedef struct {
     int src;
     int offset;
 } extra_point;
+
+Stats stats;
 
 void normalize_weights(float * weights, int n) {
     float norm = 0.0;
@@ -136,9 +139,10 @@ void push_based_pagerank(SYCL_CSR_Graph * g, sycl::device device, sycl::queue qu
             residuals[dst] += (ALPHA*(1-ALPHA)/degree) * SCALE_FACTOR;
         }
     }
-
+    stats.checkpoint("preprocessing");
     int counters[] = {0,0};
 
+    int j;
     // SYCL scope
     {
 
@@ -158,12 +162,15 @@ void push_based_pagerank(SYCL_CSR_Graph * g, sycl::device device, sycl::queue qu
 
         int wl_size = n;
         int max_its = 200;
-        for (int j = 0; j < max_its; j++) {
+        for (j = 0; j < max_its; j++) {
         // Begin counter scope
         if (!wl_size) break;
 
         {
         auto n_wgroups = ((wl_size+wgroup_size-1) / wgroup_size);
+        stats.add_datapoint("n_wgroups", n_wgroups);
+        stats.add_datapoint("wl_size", wl_size);
+
         // Initially, each work group has its own block of memory
         counters[0] = n_wgroups;
         counters[1] = 0;
@@ -225,82 +232,79 @@ void push_based_pagerank(SYCL_CSR_Graph * g, sycl::device device, sycl::queue qu
 
                     item.barrier(sycl::access::fence_space::local_space);
 
-                    //for (auto i = global_id; i < (group_id+1)*wgroup_size; i += wgroup_size) {
-                        int i = group_id*wgroup_size + local_id;
-                        int have_work = (i < wl_size);
-                        int node;
-                        if (have_work) {
-                            node = in_wl[i];
-                            //if (dup_mask[node].fetch_add(1)) have_work = 0;
+                    int i = group_id*wgroup_size + local_id;
+                    int have_work = (i < wl_size);
+                    int node;
+                    if (have_work) {
+                        node = in_wl[i];
+                    }
+
+                    if (have_work) {
+                    unsigned int old_res = sycl::atomic_fetch_and(residuals[node], (unsigned int)0);
+
+                    weights[node] += ((float)old_res) / SCALE_FACTOR;
+                    unsigned int update = ((float)old_res * ALPHA) / (float)(deg[node]);
+                    for (auto j = nodePtr[node]; j < nodePtr[node+1]; j++) {
+                        auto dst = edgeDst[j];
+                        //float old_other_res = sycl::atomic_fetch_add(residuals[dst], (float)update);
+                        unsigned int old_other_res = residuals[dst].fetch_add(update);
+                        if (old_other_res < SCALE_FACTOR*EPSILON && old_other_res + update >= SCALE_FACTOR*EPSILON) {
+                            // Don't add to the worklist if we've already processed it
+                            if (dup_mask[dst].fetch_add(1)) {
+                                //dup_mask[0].fetch_add(1);
+                                continue;
+                            }
+                            // Need to increment the local offset counter
+                            unsigned int old_offset = sycl::atomic_fetch_add(local_counters[0], (unsigned int)1);
+                            //dup_mask[1].fetch_add(1);
+                            //unsigned int allocated_blocks = local_counters[1].load() + 1;
+
+                            if (old_offset < heap_block_size) {
+                                int block_pointer = group_id;
+                                heap[block_pointer*heap_block_size + old_offset%heap_block_size] = dst;
+                            }
+
+                            // Allocate a new block of memory
+                            else if (old_offset % heap_block_size == 0) {
+                                int old_counter = sycl::atomic_fetch_add(counter[0], 1);
+                                int old_allocated_blocks = local_counters[1].fetch_add(1);
+                                heap[old_counter*heap_block_size] = dst;
+                                local_block_pointers[old_offset/heap_block_size] = old_counter;
+                            }
+
+                            // We got here before allocation of another block suceeded.
+                            // we save the offset in a global array, then do another loop after we get a chance to
+                            // sync local memory
+                            // we add one here so we can use 0 to mean empty
+                            else {
+                                extra_point tmp;
+                                tmp.src = node;
+                                tmp.offset = old_offset + 1;
+                                extra[dst] = tmp;
+                            }
                         }
+                    }
 
-                        if (have_work) {
-                        unsigned int old_res = sycl::atomic_fetch_and(residuals[node], (unsigned int)0);
+                    } // end if
 
-                        weights[node] += ((float)old_res) / SCALE_FACTOR;
-                        unsigned int update = ((float)old_res * ALPHA) / (float)(deg[node]);
+                    // sync threads
+                    item.barrier(sycl::access::fence_space::global_and_local);
+                    if (have_work) {
                         for (auto j = nodePtr[node]; j < nodePtr[node+1]; j++) {
                             auto dst = edgeDst[j];
-                            //float old_other_res = sycl::atomic_fetch_add(residuals[dst], (float)update);
-                            unsigned int old_other_res = residuals[dst].fetch_add(update);
-                            if (old_other_res < SCALE_FACTOR*EPSILON && old_other_res + update >= SCALE_FACTOR*EPSILON) {
-                                // Don't add to the worklist if we've already processed it
-                                if (dup_mask[dst].fetch_add(1)) {
-                                    //dup_mask[0].fetch_add(1);
-                                    continue;
-                                }
-                                // Need to increment the local offset counter
-                                unsigned int old_offset = sycl::atomic_fetch_add(local_counters[0], (unsigned int)1);
-                                //dup_mask[1].fetch_add(1);
-                                //unsigned int allocated_blocks = local_counters[1].load() + 1;
-
-                                if (old_offset < heap_block_size) {
-                                    int block_pointer = group_id;
-                                    heap[block_pointer*heap_block_size + old_offset%heap_block_size] = dst;
-                                }
-
-                                // Allocate a new block of memory
-                                else if (old_offset % heap_block_size == 0) {
-                                    int old_counter = sycl::atomic_fetch_add(counter[0], 1);
-                                    int old_allocated_blocks = local_counters[1].fetch_add(1);
-                                    heap[old_counter*heap_block_size] = dst;
-                                    local_block_pointers[old_offset/heap_block_size] = old_counter;
-                                }
-
-                                // We got here before allocation of another block suceeded.
-                                // we save the offset in a global array, then do another loop after we get a chance to
-                                // sync local memory
-                                // we add one here so we can use 0 to mean empty
-                                else {
-                                    extra_point tmp;
-                                    tmp.src = node;
-                                    tmp.offset = old_offset + 1;
-                                    extra[dst] = tmp;
-                                }
+                            extra_point tmp = extra[dst];
+                            // not only does this node need adding to a worklist, 
+                            // it also has to have been put into extra_point by an update from THIS node
+                            if (tmp.offset > 0 && tmp.src == node) {
+                                auto offset = tmp.offset - 1;
+                                int block_pointer = local_block_pointers[offset/heap_block_size];
+                                heap[block_pointer*heap_block_size + offset%heap_block_size] = dst;
+                                // Clear from extra
+                                tmp.offset = tmp.src = 0;
+                                extra[dst] = tmp;
                             }
                         }
-
-                        } // end if
-
-                        // sync threads
-                        item.barrier(sycl::access::fence_space::global_and_local);
-                        if (have_work) {
-                            for (auto j = nodePtr[node]; j < nodePtr[node+1]; j++) {
-                                auto dst = edgeDst[j];
-                                extra_point tmp = extra[dst];
-                                // not only does this node need adding to a worklist, 
-                                // it also has to have been put into extra_point by an update from THIS node
-                                if (tmp.offset > 0 && tmp.src == node) {
-                                    auto offset = tmp.offset - 1;
-                                    int block_pointer = local_block_pointers[offset/heap_block_size];
-                                    heap[block_pointer*heap_block_size + offset%heap_block_size] = dst;
-                                    // Clear from extra
-                                    tmp.offset = tmp.src = 0;
-                                    extra[dst] = tmp;
-                                }
-                            }
-                        }
-                    //}
+                    }
                     // sync threads
                     item.barrier(sycl::access::fence_space::global_and_local);
                     // now we know that the heap and our local_block_pointers are in a consistent state
@@ -346,6 +350,7 @@ void push_based_pagerank(SYCL_CSR_Graph * g, sycl::device device, sycl::queue qu
         std::cout << "Completed " << j+1 << " iterations" << std::endl;
         std::cout << "Heap counter " << counters[0] << std::endl;
         std::cout << "Out worklist size " << counters[1] << std::endl;
+        stats.add_datapoint("heap_counter", counters[0]);
         wl_size = counters[1];
         auto tmp = in_wl_buf;
         in_wl_buf = out_wl_buf;
@@ -373,10 +378,14 @@ void push_based_pagerank(SYCL_CSR_Graph * g, sycl::device device, sycl::queue qu
         }
     }*/
 
+    stats.add_stat("iterations", j);
+    stats.checkpoint("pagerank");
     std::cout << "Weights before normalization: ";
     print_array(weights, n);
     std::cout << "Weights after normalization: ";
     normalize_weights(weights, n);
+    stats.checkpoint("normalize");
+    stats.stop();
     print_array(weights, n);
 
     free(in_wl);
@@ -393,10 +402,11 @@ int main (int argc, char** argv)
 {
 
     if (argc < 2) {
-        std::cout << "Missing input filename" << std::endl;
+        std::cout << "Usage graphfile [outputstatsfile]" << std::endl;
         return 1;
     }
 
+    stats.start();
     SYCL_CSR_Graph g;
     g.load(argv[1]);
 
@@ -404,13 +414,15 @@ int main (int argc, char** argv)
     sycl::queue queue(device, [] (sycl::exception_list el) {
         for (auto ex : el) { std::rethrow_exception(ex); }
     } );
-
+    stats.checkpoint("load");
 
     try {
-        //atomic_experiments(device, queue);
         push_based_pagerank(&g, device, queue);
     } catch (sycl::exception& e) {
         std::cout << e.what() << std::endl;
+        return 1;
     }
+
+    if (argc > 2) stats.json_dump(argv[2]);
     return 0;
 }

@@ -3,6 +3,7 @@
 #include <cassert>
 #include <CL/sycl.hpp>
 #include "sycl_csr_graph.h"
+#include "stats.h"
 
 #define ALPHA 0.85
 #define EPSILON 0.000001
@@ -11,6 +12,7 @@
 // PageRank with power iteration in SYCL
 // This code is intended as a benchmark to test other (hopefully faster) algos against
 
+Stats stats;
 namespace sycl = cl::sycl;
 
 void normalize_weights(float * weights, int n) {
@@ -67,6 +69,8 @@ void scalar_csr(SYCL_CSR_Graph * f, int max_iters=MAX_ITERS)
        throw "Device doesn't have enough local memory!";
     }
 
+    stats.checkpoint("load");
+
     float * residuals = (float*)malloc(g->numNodes*sizeof(float));
     float * next_residuals = (float*)malloc(g->numNodes*sizeof(float));
     for (int i = 0; i < g->numNodes; i++) residuals[i] = 1-ALPHA;
@@ -120,6 +124,8 @@ void scalar_csr(SYCL_CSR_Graph * f, int max_iters=MAX_ITERS)
             } // end scope for flag
 
             if (!error_violated) {
+                stats.add_stat("iterations", iter+1);
+                stats.checkpoint("pagerank");
                 cout << "PageRank converged after " << iter+1 << " iterations" << endl;
                 break;
             }
@@ -128,9 +134,12 @@ void scalar_csr(SYCL_CSR_Graph * f, int max_iters=MAX_ITERS)
         }
     }
 
+
     cout << "PageRank weights before normalization: " << endl;
     print_array(next_residuals, n);
     normalize_weights(next_residuals, n);
+    stats.checkpoint("normalize");
+    stats.stop();
     cout << "PageRank weights after normalization: " << endl;
     print_array(next_residuals, n);
 
@@ -222,6 +231,8 @@ void adaptive_csr(SYCL_CSR_Graph * f, int max_iters=MAX_ITERS)
        throw "Device doesn't have enough local memory!";
     }
 
+    stats.checkpoint("load");
+
     float * residuals = (float*)malloc(g->numNodes*sizeof(float));
     float * next_residuals = (float*)malloc(g->numNodes*sizeof(float));
     for (int i = 0; i < g->numNodes; i++) residuals[i] = 1-ALPHA;
@@ -231,6 +242,7 @@ void adaptive_csr(SYCL_CSR_Graph * f, int max_iters=MAX_ITERS)
     int * rowBlocks;
     // Try using twice the work group size for the number of nonzeros
     int num_blocks = computeRowBlocks(g->nodeDegree, n, m, block_size, &rowBlocks);
+    stats.checkpoint("preprocessing");
     /*std::cout << "Number of blocks " << num_blocks << std::endl;
     std::cout << "Block bounds: ";
     print_array(rowBlocks, num_blocks);
@@ -401,6 +413,8 @@ void adaptive_csr(SYCL_CSR_Graph * f, int max_iters=MAX_ITERS)
             } // end scope for flag
 
             if (!error_violated) {
+                stats.add_stat("iterations", iter+1);
+                stats.checkpoint("pagerank");
                 cout << "PageRank converged after " << iter+1 << " iterations" << endl;
                 break;
             }
@@ -414,6 +428,9 @@ void adaptive_csr(SYCL_CSR_Graph * f, int max_iters=MAX_ITERS)
     cout << "PageRank weights before normalization: " << endl;
     print_array(next_residuals, n);
     normalize_weights(next_residuals, n);
+    stats.checkpoint("normalize");
+    stats.stop();
+
     cout << "PageRank weights after normalization: " << endl;
     print_array(next_residuals, n);
 
@@ -427,30 +444,35 @@ int main (int argc, char** argv)
 {
 
     if (argc < 2) {
-        std::cout << "Missing input graph filename." << std::endl;
+        std::cout << "Usage graphfile [algo] [statsoutput]" << std::endl;
         return 1;
     }
 
     char algo = (argc >= 3) ? argv[2][0] : 'a';
-    int max_iters = (argc >= 4) ? atoi(argv[3]) : MAX_ITERS;
 
+    stats.start();
     SYCL_CSR_Graph* f = new SYCL_CSR_Graph();
     f->load(argv[1]);
     switch (algo) {
         case 'a':
             std::cout << "Running adaptive CSR" << std::endl;
-            adaptive_csr(f, max_iters);
+            adaptive_csr(f);
             break;
         case 's':
             std::cout << "Running scalar CSR" << std::endl;
-            scalar_csr(f, max_iters);
+            scalar_csr(f);
             break;
         default:
             std::cout << "Unrecognized algorithm: " << algo << std::endl;
-            break;
+            return 1;
     }
 
     delete f;
+
+    if (argc >= 4) {
+        stats.json_dump(argv[3]);
+    }
+
     return 0;
 }
 
