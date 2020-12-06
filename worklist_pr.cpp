@@ -7,11 +7,13 @@
 
 #define ALPHA 0.85
 #define EPSILON 0.000001
-//#define EPSILON 0.001
+
+#define CPU_WLIST_CROSSOVER 100
 
 #define MAX_WGROUP_BLOCKS 100
 
 #define SCALE_FACTOR 0x100000
+#define MAX_ITER 200
 
 // My attempt at push-based PageRank (with a worklist)
 
@@ -93,6 +95,41 @@ void atomic_experiments(sycl::device device, sycl::queue queue)
 }
 
 
+// When the worklist size drops below 100, we switch to the CPU to avoid overhead from launching kernels
+int serial_push_pagerank(SYCL_CSR_Graph * g, int * in_wl, int * out_wl, float* weights, unsigned int * residuals, int wl_size, int iter)
+{
+    std::cout << "Switching to CPU, starting WL size " << wl_size << std::endl;
+    int cpu_rounds = 0;
+    while (iter < MAX_ITER && wl_size > 0) {
+        int new_wl_size = 0;
+        for (int i = 0; i < wl_size; i++) {
+            int node = in_wl[i];
+            float old_res = residuals[node];
+            residuals[node] = 0;
+            weights[node] += old_res/(float)SCALE_FACTOR;
+            unsigned int update = old_res * ALPHA / (float)(g->nodeDegree[node]);
+            for (int edge = g->nodePtr[node]; edge < g->nodePtr[node+1]; edge++) {
+                int dst = g->data[edge];
+                unsigned int dst_res = residuals[dst];
+                residuals[dst] += update;
+                if (dst_res < SCALE_FACTOR*EPSILON && dst_res + update >= SCALE_FACTOR*EPSILON) {
+                    out_wl[new_wl_size++] = dst;
+                }
+            }
+        }
+
+        wl_size = new_wl_size;
+        int * tmp = in_wl;
+        in_wl = out_wl;
+        out_wl = tmp;
+        iter++;
+        cpu_rounds++;
+        std::cout << "Completed " << cpu_rounds << " on the CPU, " << iter << " rounds total." << std::endl;
+        std::cout << "Out worklist size " << wl_size << std::endl; 
+    }
+    return cpu_rounds;
+}
+
 void push_based_pagerank(SYCL_CSR_Graph * g, sycl::device device, sycl::queue queue)
 {
     auto wgroup_size = device.get_info<sycl::info::device::max_work_group_size>();
@@ -143,6 +180,8 @@ void push_based_pagerank(SYCL_CSR_Graph * g, sycl::device device, sycl::queue qu
     int counters[] = {0,0};
 
     int iter;
+    int wl_size = n;
+
     // SYCL scope
     {
 
@@ -160,11 +199,10 @@ void push_based_pagerank(SYCL_CSR_Graph * g, sycl::device device, sycl::queue qu
         sycl::buffer<extra_point, 1> extra_buf(extra_mask, sycl::range<1>(n));
         sycl::buffer<int, 1> dup_buf(dup_mask, sycl::range<1>(n));
 
-        int wl_size = n;
         int max_its = 200;
         for (iter = 0; iter < max_its; iter++) {
         // Begin counter scope
-        if (!wl_size) break;
+        if (!wl_size || wl_size < CPU_WLIST_CROSSOVER) break;
 
         {
         auto n_wgroups = ((wl_size+wgroup_size-1) / wgroup_size);
@@ -345,18 +383,20 @@ void push_based_pagerank(SYCL_CSR_Graph * g, sycl::device device, sycl::queue qu
 
     }
 
-//    std::cout << "Heap counter " << counters[0] << std::endl;
-//    std::cout << "Heap: ";
-//    print_array(heap, heap_size);
+    // Finish off on CPU
+    int cpu_iters = 0;
+    if (wl_size) {
+        // If we have completed an odd number of iterations, we need to switch the pointers
+        if (iter % 2) {
+            int * tmp = in_wl;
+            in_wl = out_wl;
+            out_wl = tmp;
+        }
+        cpu_iters = serial_push_pagerank(g, in_wl, out_wl, weights, residuals, wl_size, iter);
+    }
 
-//    std::cout << "Out worklist size " << counters[1] << std::endl;
-//    std::cout << "Out worklist: ";
-//    print_array(out_wl, counters[1]);
-//    check_dups(out_wl, counters[1], n);
-//    check_dups(heap, heap_size, n);
-
-
-    stats.add_stat("iterations", iter);
+    stats.add_stat("iterations", iter+cpu_iters);
+    stats.add_stat("gpu_iterations", iter);
     stats.checkpoint("pagerank");
     std::cout << "Weights before normalization: ";
     print_array(weights, n);

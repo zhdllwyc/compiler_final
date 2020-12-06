@@ -48,6 +48,7 @@ if __name__ == "__main__":
     parser.add_argument("--problem", choices=["pagerank", "bfs"], default="pagerank")
     parser.add_argument("--runs", type=int, default=3)
     args = parser.parse_args()
+    print(args)
 
     try:
         executable = executables[args.problem][args.algo]
@@ -70,6 +71,7 @@ if __name__ == "__main__":
             print(f"Processing {alias}, round {i}")
             try:
                 if args.algo == "galois":
+                    if alias == "rmat24": continue
                     res = subprocess.run(args=executable+[full_path], check=True,
                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding="ascii")
                     info = resource.getrusage(resource.RUSAGE_CHILDREN)
