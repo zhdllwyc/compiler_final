@@ -1,0 +1,10 @@
+*
+#Allow only real code and data - NO generated binaries!
+!.gitignore
+!*/
+!*.cpp
+!*.zip
+!*.txt
+!*.py
+!*.h
+!*.md
