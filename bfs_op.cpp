@@ -60,13 +60,14 @@ int main (int argc, char** argv)
     Level[starting_node]=1;
     done[0]=0;
     auto t1 = std::chrono::high_resolution_clock::now();
-  
+    int iteration = 0;
     //auto part_size = wgroup_size * 2;
     auto n_wgroups = (n+wgroup_size)/ wgroup_size;
     std::cout<<n_wgroups<<std::endl;
     //while not done
     while(done[0]==0){   
     {
+           iteration = iteration+1;
            //done[0] = 1;
            sycl::buffer<int, 1> Frontier_buf(Frontier, sycl::range<1>(n));
            sycl::buffer<int, 1> Visited_buf(Visited, sycl::range<1>(n));
@@ -142,15 +143,15 @@ int main (int argc, char** argv)
     auto duration = std::chrono::duration_cast<std::chrono::microseconds>( t2 - t1 ).count();
 
 
-    std::cout << "duration: "<<duration<< std::endl;
+    std::cout << "duration: "<<duration<<" "<<iteration<< std::endl;
   
     std::cout<<std::endl;
-    for (int i = 0; i < 100; i++) {
+    /*for (int i = 0; i < 100; i++) {
        std::cout <<i <<": "<<  Level[i] << "\n ";
 
     }
     std::cout<<std::endl;
-    
+    */
 
 
 

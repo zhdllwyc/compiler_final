@@ -48,8 +48,8 @@ void push_based_bfs(SYCL_CSR_Graph * g, sycl::device device, sycl::queue queue, 
     {
        throw "Device doesn't have enough local memory!";
     }
-    local_mem_size = 10000; 
-    int local_bound = 7500;
+    local_mem_size = 12000;
+    //int local_bound = 3000; 
     int n = g->numNodes; //number of nodes
     int toExplore = n;//max_outdegree*wgroup_size;//the number of nodes we need to explore
     int frontier_size=2*n;
@@ -136,26 +136,20 @@ void push_based_bfs(SYCL_CSR_Graph * g, sycl::device device, sycl::queue queue, 
                      1,
                      sycl::access::mode::atomic,
                      sycl::access::target::local>
-                     local_counter(sycl::range<1>(1), cgh);//how many space are taken by real vertices
+                     local_counter(sycl::range<1>(1), cgh);
                 sycl::accessor
                     <int,
                      1,
                      sycl::access::mode::atomic,
                      sycl::access::target::local>
-                     local_counter_total(sycl::range<1>(1), cgh);//how many space are taken
+                     local_counter_expired(sycl::range<1>(1), cgh);
                 sycl::accessor
                     <int,
                      1,
                      sycl::access::mode::read_write,
                      sycl::access::target::local>
                      local_visit(sycl::range<1>(local_mem_size), cgh);
-                /*sycl::accessor
-                    <int,
-                     1,
-                     sycl::access::mode::atomic,
-                     sycl::access::target::local>
-                     local_visit_lock(sycl::range<1>(local_mem_size), cgh);
-                sycl::accessor
+      /*          sycl::accessor
                     <int,
                      1,
                      sycl::access::mode::read_write,
@@ -167,7 +161,7 @@ void push_based_bfs(SYCL_CSR_Graph * g, sycl::device device, sycl::queue queue, 
                      sycl::access::mode::atomic,
                      sycl::access::target::local>
                      local_backup_counter(sycl::range<1>(1), cgh);//how many space are taken
-                */
+      */
                 //for each vertex V in parallel do
                 cgh.parallel_for<class bfs_OP>(
                     sycl::nd_range<1>((n_wgroups)*wgroup_size, wgroup_size),
@@ -182,9 +176,9 @@ void push_based_bfs(SYCL_CSR_Graph * g, sycl::device device, sycl::queue queue, 
                         }
                         if(local_id==0){
                             sycl::atomic_store(local_counter[0], 0);
-                            sycl::atomic_store(local_counter_total[0], 0);
-                            //sycl::atomic_store(local_backup_counter[0], 0);
+                            sycl::atomic_store(local_counter_expired[0], 0);
                             group_submit[group_id] = 0;
+                            //sycl::atomic_store(local_backup_counter[0], 0);
                         }
 
                         for(int i = local_id; i<local_mem_size; i+=wgroup_size){
@@ -199,19 +193,20 @@ void push_based_bfs(SYCL_CSR_Graph * g, sycl::device device, sycl::queue queue, 
                             for (auto i = nodePtr[vertex_index]; i < nodePtr[vertex_index+1]; i++) { // for all neighbors
                                 auto src = edgeDst[i];
                                 if(Level_submit[src]==0){
+                                    Level_submit[src] = Level_submit[vertex_index]+1;
                                     done_submit[0] = 0;
                                     int old_lock = sycl::atomic_fetch_add(Frontier_lock_submit[src], 1);
                                     if(old_lock==0){
-                                        Level_submit[src] = Level_submit[vertex_index]+1;
-                                        int old_index = sycl::atomic_fetch_add(local_counter_total[0], 1);
-                                        if(old_index<local_mem_size){ // we have space in local visit 
-                                            local_visit[old_index] = src;
-                                            sycl::atomic_fetch_add(local_counter[0], 1);                 
-                                        }else{ // we don't have any space left, local_counter == local_mem_size, so copy into global
-                                            sycl::atomic_fetch_sub(local_counter_total[0], 1);
-                                            unsigned int old_global = sycl::atomic_fetch_add(new_frontier_number_submit[0], 1);
-                                            new_Frontier_submit[old_global] = src;
-                                        }
+                                    int old_index = sycl::atomic_fetch_add(local_counter[0], 1);
+                                    if(old_index<local_mem_size){ // we have space in local visit 
+                                        local_visit[old_index] = src;
+                                        sycl::atomic_fetch_add(local_counter_expired[0], 1);                 
+                                    }else{ // we don't have any space left, local_counter == local_mem_size, so copy into global
+                                        sycl::atomic_fetch_sub(local_counter[0], 1);
+                                        unsigned int old_global = sycl::atomic_fetch_add(new_frontier_number_submit[0], 1);
+                                        new_Frontier_submit[old_global] = src;
+                                    }
+
                                     }
 
                                 }
@@ -221,53 +216,47 @@ void push_based_bfs(SYCL_CSR_Graph * g, sycl::device device, sycl::queue queue, 
                         int curr_local_counter = local_counter[0].load();
                         int iterator = 0;
                         if(curr_local_counter<local_mem_size){ //if we still have space in the local visit
-                          while(/*iterator<500*/ true){
-                            item.barrier(sycl::access::fence_space::local_space);   
+                          while(/*iterator<500*/true){
+                            int old_counter = local_counter[0].load();
                             for(int i = local_id; i<local_mem_size; i+=wgroup_size){
                                 int curr_vertex = local_visit[i];
                                 int thread_counter = 0;
-                                local_visit[i] = n+1;//once visit mark it as n+1, invalid
-                                if(curr_vertex != (n+1)){
-                                    
-                                
-                                sycl::atomic_fetch_sub(local_counter[0], 1);
+                                local_visit[i] = n+1;
+                                if(curr_vertex == (n+1)){
+                                    continue;
+                                }
+                                sycl::atomic_fetch_sub(local_counter_expired[0], 1);
                                 for (auto j = nodePtr[curr_vertex]; j < nodePtr[curr_vertex+1]; j++) { 
                                     auto curr_src = edgeDst[j];//this is the new frontier now
                                     if(Level_submit[curr_src]==0){
+                                        Level_submit[curr_src] = Level_submit[curr_vertex]+1;
                                         int old_lock = sycl::atomic_fetch_add(Frontier_lock_submit[curr_src], 1);
                                         if(old_lock==0){
-                                            Level_submit[curr_src] = Level_submit[curr_vertex]+1;  
-                                            int old_index = sycl::atomic_fetch_add(local_counter_total[0], 1);
-                                            if(old_index<local_mem_size){ // we have space in local visit
-                                                 sycl::atomic_fetch_add(local_counter[0], 1);
-                                                 thread_counter = thread_counter + 1; 
-                                                 if(thread_counter==1){
-                                                     sycl::atomic_fetch_sub(local_counter_total[0], 1);
-                                                     local_visit[i] = curr_src;                    
-                                                 }else{
-                                                     //sycl::atomic_fetch_add(local_counter[0], 1);
-                                                     local_visit[old_index] = curr_src;
-                                                 }
+                                            int old_index = sycl::atomic_fetch_add(local_counter[0], 1);
+                                            if(old_index<local_mem_size){ // we have space in local visit 
+                                                 local_visit[old_index] = curr_src;
+                                                 sycl::atomic_fetch_add(local_counter_expired[0], 1);
                                             }else{ // we don't have any space left, local_counter == local_mem_size, so copy into global
-                                                 sycl::atomic_fetch_sub(local_counter_total[0], 1);
+                                                 sycl::atomic_fetch_sub(local_counter[0], 1);
                                                  unsigned int old_global = sycl::atomic_fetch_add(new_frontier_number_submit[0], 1);
                                                  new_Frontier_submit[old_global] = curr_src;
                                             }
                                         }
                                     }
                                 }
-
-                                }
-                               // if(thread_counter == 0){//this vertex has no neighbor unvisited
-                                 //   sycl::atomic_fetch_sub(local_counter[0], 1);
-                               // }
                             }
                             item.barrier(sycl::access::fence_space::local_space);
- 
+                            //item.barrier(sycl::access::fence_space::global_and_local);
+                            
                             curr_local_counter = local_counter[0].load();
-                            int curr_local_counter_total = local_counter_total[0].load();
-                            //we want to clean the local_visit
-                            /*if((curr_local_counter_total==local_mem_size)&&(curr_local_counter<local_bound)){
+                            int curr_local_counter_expired = local_counter_expired[0].load();
+                            iterator = iterator+1;
+                            if((curr_local_counter==(local_mem_size)) ||(curr_local_counter_expired<1)){
+                               break;
+                            }
+
+
+                            /*if((curr_local_counter==local_mem_size)&&(curr_local_counter_expired<local_bound)){
                                 for(int i = local_id; i<local_mem_size; i+=wgroup_size){
                                     if(local_visit[i]!=(n+1)){//copy to local backup
                                         int old_index = sycl::atomic_fetch_add(local_backup_counter[0], 1);
@@ -285,28 +274,25 @@ void push_based_bfs(SYCL_CSR_Graph * g, sycl::device device, sycl::queue queue, 
                                     local_visit[old_index] = local_backup[i];
                                     local_backup[i] = n+1;
                                 }
+                                item.barrier(sycl::access::fence_space::local_space);
+                                if(local_id==0){
+                                    sycl::atomic_store(local_backup_counter[0], 0);
+                                }
+                                item.barrier(sycl::access::fence_space::local_space);
                             }*/
-                            
-                            iterator = iterator+1;
-                            if(curr_local_counter_total>=local_mem_size){ 
-                               break;
-                            }
-                            if(curr_local_counter<1){
-                               break;
-                            }
 
-                            item.barrier(sycl::access::fence_space::local_space);
                           }                       
                         }
                         item.barrier(sycl::access::fence_space::local_space);
+                        //item.barrier(sycl::access::fence_space::global_and_local);
 
                         //copy everything from local to global
-                        int local_curr = local_counter[0].load();
+                        int local_curr = local_counter_expired[0].load();
                         
                         if(local_id==0){
                             int curr_new_frontier_number = sycl::atomic_fetch_add(new_frontier_number_submit[0], local_curr);
                             sycl::atomic_store(local_counter[0], curr_new_frontier_number);
-                            sycl::atomic_store(local_counter_total[0], 0);
+                            sycl::atomic_store(local_counter_expired[0], 0);
                         }
                         item.barrier(sycl::access::fence_space::local_space);
                         //item.barrier(sycl::access::fence_space::global_and_local);
@@ -315,9 +301,11 @@ void push_based_bfs(SYCL_CSR_Graph * g, sycl::device device, sycl::queue queue, 
                             int starting = local_counter[0].load();
                             for(int i = local_id; i<local_mem_size; i+=wgroup_size){
                                 int curr_vertex = local_visit[i];
+                                int curr_offset = sycl::atomic_fetch_add(local_counter_expired[0], 1);
                                 if(curr_vertex!=(n+1)){
-                                    int curr_offset = sycl::atomic_fetch_add(local_counter_total[0], 1);
                                     new_Frontier_submit[starting+curr_offset] = curr_vertex;
+                                }else{
+                                    sycl::atomic_fetch_sub(local_counter_expired[0], 1);
                                 }
                             }
                         }
@@ -342,12 +330,12 @@ void push_based_bfs(SYCL_CSR_Graph * g, sycl::device device, sycl::queue queue, 
     auto duration = std::chrono::duration_cast<std::chrono::microseconds>( t2 - t1 ).count();
 
 
-    std::cout << "final Levels: "<<max_outdegree <<" "<<duration<<" "<<done[0]<< std::endl;
-    std::cout<<std::endl;
+    std::cout << "final Levels: "<<max_outdegree <<" "<<duration<<" "<<iteration<< std::endl;
+    /*std::cout<<std::endl;
     for (int i = 0; i < 100; i++) {
        std::cout <<i <<": "<<  Level[i]<<  "\n ";
 
-    }
+    }*/
     std::cout<<std::endl;
     
 
