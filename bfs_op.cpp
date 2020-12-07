@@ -55,18 +55,19 @@ int main (int argc, char** argv)
     
     for (int i = 0; i < g->numNodes; i++) Frontier[i] = 0;
     for (int i = 0; i < g->numNodes; i++) Visited[i] = 0;
-    for (int i = 0; i < g->numNodes; i++) Level[i] = (g->numNodes+1);
+    for (int i = 0; i < g->numNodes; i++) Level[i] = 0;
     Frontier[starting_node] = 1;
-    Level[starting_node]=0;
+    Level[starting_node]=1;
     done[0]=0;
-    
+    auto t1 = std::chrono::high_resolution_clock::now();
+  
     //auto part_size = wgroup_size * 2;
     auto n_wgroups = (n+wgroup_size)/ wgroup_size;
     std::cout<<n_wgroups<<std::endl;
     //while not done
     while(done[0]==0){   
     {
-           done[0] = 1;
+           //done[0] = 1;
            sycl::buffer<int, 1> Frontier_buf(Frontier, sycl::range<1>(n));
            sycl::buffer<int, 1> Visited_buf(Visited, sycl::range<1>(n));
            sycl::buffer<int, 1> Level_buf(Level, sycl::range<1>(n));
@@ -95,50 +96,57 @@ int main (int argc, char** argv)
                         size_t global_id = item.get_global_linear_id();
                         size_t group_id = item.get_group_linear_id();
                         size_t local_id = item.get_local_linear_id();
-                        size_t index = global_id;//wgroup_size*group_id+local_id;   
+                        size_t index = wgroup_size*group_id+local_id;   
                         global_submit[index] = index;
                         group_submit[index] = group_id;             
                         local_submit[index] = local_id; 
-                        //if (group_id >= n_wgroups) return;        
-                        if( index <n){
-                        
-                        if(Frontier_submit[index] == 1){
+                        //if (group_id >= n_wgroups) return
+                        if(index == 0){
+                            done_submit[0]=1;
+                        }        
+                        item.barrier(sycl::access::fence_space::local_space);
+
+                        if( index <n) {
+                          if(Frontier_submit[index] == 1){
                             Frontier_submit[index] =0;
-                            Visited_submit[index] =1;
-                            item.barrier(sycl::access::fence_space::global_and_local);
+                            //Visited_submit[index] =1;
+                            //item.barrier(sycl::access::fence_space::global_and_local);
                             
                             for (auto i = nodePtr[index]; i < nodePtr[index+1]; i++) { // for all neighbors
                                  auto src = edgeDst[i];
-                                 if(Visited_submit[src]==0){
+                                 if(Level_submit[src]==0){
                                      Level_submit[src] = Level_submit[index]+1;
                                      Frontier_submit[src] = 1;
                                      done_submit[0] = 0;
                                  }
                             }
-                            //item.barrier(sycl::access::fence_space::local_space);
                             
-                        } 
+                          }
                         }
-                        item.barrier(sycl::access::fence_space::global_and_local);           
-                    }
-                );
+                        item.barrier(sycl::access::fence_space::local_space);
+                                    
+                    });
            });
            queue.wait_and_throw();
            /*std::cout << "Levels: " << std::endl;
            std::cout<<done[0]<<std::endl;
-           for (int i = 0; i < n; i++) {
-               std::cout <<i <<": "<<  Level[i] << " "<< local[i]<<" "<<group[i]<<" "<<global[i]<< "\n ";
+           for (int i = 0; i < 100; i++) {
+               std::cout <<i <<": "<<  Level[i] << "\n ";
 
            }
            std::cout<<std::endl;*/
     }
 
     }
+    auto t2 = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::microseconds>( t2 - t1 ).count();
 
-    std::cout << "final Levels: " << std::endl;
+
+    std::cout << "duration: "<<duration<< std::endl;
+  
     std::cout<<std::endl;
     for (int i = 0; i < 100; i++) {
-       std::cout <<i <<": "<<  Level[i] << " "<< local[i]<<" "<<group[i]<<" "<<global[i]<< "\n ";
+       std::cout <<i <<": "<<  Level[i] << "\n ";
 
     }
     std::cout<<std::endl;
