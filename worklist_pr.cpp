@@ -1,6 +1,7 @@
 #include <iostream>
 #include <cstdint>
 #include <cassert>
+#include <vector>
 #include <CL/sycl.hpp>
 #include "sycl_csr_graph.h"
 #include "stats.h"
@@ -8,7 +9,7 @@
 #define ALPHA 0.85
 #define EPSILON 0.000001
 
-#define CPU_WLIST_CROSSOVER 100
+#define CPU_WLIST_CROSSOVER 10000
 
 #define MAX_WGROUP_BLOCKS 100
 
@@ -136,7 +137,7 @@ void push_based_pagerank(SYCL_CSR_Graph * g, sycl::device device, sycl::queue qu
     int n = g->numNodes;
 
     // Initialize worklists
-    int max_wl_size = 2*n;
+    int max_wl_size = 1.1*n;
     int * in_wl = (int*)malloc(max_wl_size*sizeof(int));
     int * out_wl = (int*)malloc(max_wl_size*sizeof(int));
 
@@ -150,13 +151,13 @@ void push_based_pagerank(SYCL_CSR_Graph * g, sycl::device device, sycl::queue qu
     int * heap = (int*)malloc(heap_size*sizeof(int));
     // If a work-group needs extra blocks, we mark the 'excess nodes' with their offsets
     extra_point * extra_mask = (extra_point*)malloc(n*sizeof(extra_point));
-    int * dup_mask = (int*)malloc(n*sizeof(int));
+    //int * dup_mask = (int*)malloc(n*sizeof(int));
     
 
     memset(out_wl, 0, max_wl_size * sizeof(int));
     memset(in_wl, 0, max_wl_size * sizeof(int));
     memset(extra_mask, 0, n*sizeof(extra_point));
-    memset(dup_mask, 0, n*sizeof(int));
+    //memset(dup_mask, 0, n*sizeof(int));
 
     int i;
     for (i = 0; i < n; i++) {
@@ -168,14 +169,14 @@ void push_based_pagerank(SYCL_CSR_Graph * g, sycl::device device, sycl::queue qu
     unsigned int * residuals = (unsigned int*)malloc(n*sizeof(unsigned int));
     memset(residuals, 0, n*sizeof(unsigned int));
     float * weights = (float*)malloc(n*sizeof(float));
-    for (i = 0; i < n; i++) {
+    /*for (i = 0; i < n; i++) {
         weights[i] = 1-ALPHA;
         int degree = g->getOutDegree(i);
         for (int edge = g->getEdgeStart(i); edge < g->getEdgeEnd(i); edge++) {
             int dst = g->getEdgeDst(edge);
             residuals[dst] += (ALPHA*(1-ALPHA)/degree) * SCALE_FACTOR;
         }
-    }
+    }*/
     stats.checkpoint("preprocessing");
     int counters[] = {0,0};
 
@@ -189,7 +190,7 @@ void push_based_pagerank(SYCL_CSR_Graph * g, sycl::device device, sycl::queue qu
         sycl::buffer<unsigned int, 1> res_buf(residuals, sycl::range<1>(n));
         sycl::buffer<float, 1> weight_buf(weights, sycl::range<1>(n));
         // Buffers to access graph data
-        sycl::buffer<int, 1> deg_buf(g->nodeDegree, sycl::range<1>(n));
+        //sycl::buffer<int, 1> deg_buf(g->nodeDegree, sycl::range<1>(n));
         sycl::buffer<int, 1> nodePtr_buf(g->nodePtr, sycl::range<1>(n+1));
         sycl::buffer<int, 1> edgeDst_buf(g->data, sycl::range<1>(g->numEdges));
         // Worklist related buffers
@@ -197,7 +198,33 @@ void push_based_pagerank(SYCL_CSR_Graph * g, sycl::device device, sycl::queue qu
         sycl::buffer<int, 1> out_wl_buf(out_wl, sycl::range<1>(max_wl_size));
         sycl::buffer<int, 1> heap_buf(heap, sycl::range<1>(heap_size));
         sycl::buffer<extra_point, 1> extra_buf(extra_mask, sycl::range<1>(n));
-        sycl::buffer<int, 1> dup_buf(dup_mask, sycl::range<1>(n));
+        //sycl::buffer<int, 1> dup_buf(dup_mask, sycl::range<1>(n));
+        
+        queue.submit([&] (sycl::handler& cgh) {
+            // create accessors
+            // read-only
+            //auto deg = deg_buf.get_access<sycl::access::mode::read>(cgh);
+            auto nodePtr = nodePtr_buf.get_access<sycl::access::mode::read>(cgh);
+            auto edgeDst = edgeDst_buf.get_access<sycl::access::mode::read>(cgh);
+            // read-write
+            auto weights = weight_buf.get_access<sycl::access::mode::read_write>(cgh);
+            //atomic
+            auto residuals = res_buf.get_access<sycl::access::mode::atomic>(cgh);
+            cgh.parallel_for<class worklist_pr_init>(
+                sycl::range<1>(n),
+                [=] (sycl::item<1> item) {
+                    size_t local_id = item.get_linear_id();
+                    weights[local_id] = 1-ALPHA;
+                    int start = nodePtr[local_id];
+                    int end = nodePtr[local_id+1];
+                    float denom = end-start;
+                    unsigned int update = SCALE_FACTOR * (ALPHA)*(1-ALPHA) / (denom);
+                    for (int j = start; j < end; j++) {
+                        int dst = edgeDst[j];
+                        residuals[dst].fetch_add(update);
+                    }
+                });
+        });
 
         int max_its = 200;
         for (iter = 0; iter < max_its; iter++) {
@@ -219,7 +246,7 @@ void push_based_pagerank(SYCL_CSR_Graph * g, sycl::device device, sycl::queue qu
         queue.submit([&] (sycl::handler& cgh) {
             // create accessors
             // read-only
-            auto deg = deg_buf.get_access<sycl::access::mode::read>(cgh);
+            //auto deg = deg_buf.get_access<sycl::access::mode::read>(cgh);
             auto nodePtr = nodePtr_buf.get_access<sycl::access::mode::read>(cgh);
             auto edgeDst = edgeDst_buf.get_access<sycl::access::mode::read>(cgh);
             // read-write
@@ -230,7 +257,7 @@ void push_based_pagerank(SYCL_CSR_Graph * g, sycl::device device, sycl::queue qu
             auto extra = extra_buf.get_access<sycl::access::mode::read_write>(cgh);
             //atomic
             auto residuals = res_buf.get_access<sycl::access::mode::atomic>(cgh);
-            auto dup_mask = dup_buf.get_access<sycl::access::mode::atomic>(cgh);
+            //auto dup_mask = dup_buf.get_access<sycl::access::mode::atomic>(cgh);
 
             // counters
             auto counter = counter_buf.get_access<sycl::access::mode::atomic>(cgh);
@@ -272,26 +299,31 @@ void push_based_pagerank(SYCL_CSR_Graph * g, sycl::device device, sycl::queue qu
 
                     int i = group_id*wgroup_size + local_id;
                     int have_work = (i < wl_size);
-                    int node;
+                    int have_extra = 0;
+                    int node, start, end;
+                    float denom;                    
                     if (have_work) {
                         node = in_wl[i];
+                        start = nodePtr[node];
+                        end = nodePtr[node+1];
+                        denom = end-start;
                     }
 
                     if (have_work) {
                     unsigned int old_res = sycl::atomic_fetch_and(residuals[node], (unsigned int)0);
 
                     weights[node] += ((float)old_res) / SCALE_FACTOR;
-                    unsigned int update = ((float)old_res * ALPHA) / (float)(deg[node]);
-                    for (auto j = nodePtr[node]; j < nodePtr[node+1]; j++) {
+                    unsigned int update = ((float)old_res * ALPHA) / denom;
+                    if (update) {
+                    for (auto j = start; j < end; j++) {
                         auto dst = edgeDst[j];
-                        //float old_other_res = sycl::atomic_fetch_add(residuals[dst], (float)update);
                         unsigned int old_other_res = residuals[dst].fetch_add(update);
                         if (old_other_res < SCALE_FACTOR*EPSILON && old_other_res + update >= SCALE_FACTOR*EPSILON) {
                             // Don't add to the worklist if we've already processed it
-                            if (dup_mask[dst].fetch_max(iter+1) == iter+1) {
+                            /*if (dup_mask[dst].fetch_max(iter+1) == iter+1) {
                                 //dup_mask[0].fetch_add(1);
                                 continue;
-                            }
+                            }*/
                             // Need to increment the local offset counter
                             unsigned int old_offset = sycl::atomic_fetch_add(local_counters[0], (unsigned int)1);
                             //dup_mask[1].fetch_add(1);
@@ -319,16 +351,18 @@ void push_based_pagerank(SYCL_CSR_Graph * g, sycl::device device, sycl::queue qu
                                 tmp.src = node;
                                 tmp.offset = old_offset + 1;
                                 extra[dst] = tmp;
+                                have_extra = 1;
                             }
                         }
                     }
+                    } // end if have update
 
-                    } // end if
+                    } // end if                    
 
                     // sync threads
                     item.barrier(sycl::access::fence_space::global_and_local);
-                    if (have_work) {
-                        for (auto j = nodePtr[node]; j < nodePtr[node+1]; j++) {
+                    if (have_work && have_extra) {
+                        for (auto j = start; j < end; j++) {
                             auto dst = edgeDst[j];
                             extra_point tmp = extra[dst];
                             // not only does this node need adding to a worklist, 
@@ -369,11 +403,16 @@ void push_based_pagerank(SYCL_CSR_Graph * g, sycl::device device, sycl::queue qu
 
         });
 
-        queue.wait_and_throw();
+        /*try {
+            queue.wait_and_throw();
+        } catch (const cl::sycl::exception& e) {
+            std::cout << e.what() << std::endl;
+            break;
+        }*/
         } // end counter scope to force copy back to device
-        std::cout << "Completed " << iter+1 << " iterations" << std::endl;
+        /*std::cout << "Completed " << iter+1 << " iterations" << std::endl;
         std::cout << "Heap counter " << counters[0] << std::endl;
-        std::cout << "Out worklist size " << counters[1] << std::endl;
+        std::cout << "Out worklist size " << counters[1] << std::endl;*/
         stats.add_datapoint("heap_counter", counters[0]);
         wl_size = counters[1];
         auto tmp = in_wl_buf;
@@ -412,7 +451,7 @@ void push_based_pagerank(SYCL_CSR_Graph * g, sycl::device device, sycl::queue qu
     free(out_wl);
     free(heap);
     free(extra_mask);
-    free(dup_mask);
+//    free(dup_mask);
 }
 
 
@@ -428,7 +467,25 @@ int main (int argc, char** argv)
     SYCL_CSR_Graph g;
     g.load(argv[1]);
 
-    sycl::device device = sycl::gpu_selector{}.select_device();
+    std::vector<cl::sycl::device> devices = sycl::device::get_devices();
+
+    sycl::device device;
+    int first = 1;
+
+    for (const auto& dev : devices) {
+        if (!first && dev.is_gpu()) {
+            device = dev;
+            break;
+        }
+        if (dev.is_gpu()) first = 0;
+    }
+//    return 0;
+
+    std::cout << "Running on "
+            << device.get_info<sycl::info::device::name>()
+            << "\n";
+
+    //sycl::device device = sycl::gpu_selector{}.select_device();
     sycl::queue queue(device, [] (sycl::exception_list el) {
         for (auto ex : el) { std::rethrow_exception(ex); }
     } );
