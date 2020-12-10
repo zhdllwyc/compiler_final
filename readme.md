@@ -13,7 +13,7 @@ All of our experiments were done on the Oden Institute's Tuxedo machine (at UT A
 The above script will generate four executables. For all scripts the first argument is always the input graph.
 Both the Galois binary format (.gr) and an edge-list text format (.txt) are accepted.
 
-### BFS - 
+### BFS 
 
 For all BFS implementations the starting node defaults to 0.
 
