@@ -82,7 +82,8 @@ public:
     // Contains the 'destinations' of the edges
     // For PageRank and BFS, we don't care about edge weights
     int* data;
-
+    int* edge_start;
+    int* edge_end;
 protected:
 
     // Allocate memory for the graph

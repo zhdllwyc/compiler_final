@@ -43,6 +43,8 @@ void SYCL_CSR_Graph::allocateArrays() {
     this->nodeDegree = (int*)malloc(sizeof(int)*n);
     this->nodePtr = (int*)malloc(sizeof(int)*(n+1));
     this->data = (int*)malloc(sizeof(int)*m);
+    this->edge_start = (int*)malloc(sizeof(int)*m);
+    this->edge_end = (int*)malloc(sizeof(int)*m);
     this->nodePtr[0] = 0;
     memset(this->nodeDegree, 0, sizeof(int)*n);
 }
@@ -91,13 +93,17 @@ int SYCL_CSR_Graph::loadTxt(string filename) {
     for (i = 0; i < n; i++) {
         edgeLists[i] = new vector<int>();
     }
-
+    this->allocateArrays();
     int source, dest;
+    int iteration = 0;
     while (infile >> source >> dest) {
         edgeLists[source]->push_back(dest);
+        this->edge_start[iteration] = source;
+        this->edge_end[iteration] = dest;
+        iteration = iteration+1;
     }
 
-    this->allocateArrays();
+    //this->allocateArrays();
     int max_degree = edgeLists[0]->size();
     for (i = 0; i < n; i++) {
         sort(edgeLists[i]->begin(), edgeLists[i]->end());
@@ -154,7 +160,6 @@ int SYCL_CSR_Graph::loadGalois(string filename) {
     }
 
     cout << "Reading Galois graph version " << galois_version << ", numNodes " << galois_nodes << " numEdges " << galois_edges << endl;
-
     if (galois_edges > INT_MAX || galois_nodes > INT_MAX) {
         cout << "Graph too large to fit into 32-bit integers! Aborting." << endl;
         munmap(base, statbuf.st_size);
@@ -172,7 +177,9 @@ int SYCL_CSR_Graph::loadGalois(string filename) {
 
     if (galois_version == 1) {
         uint32_t* edgeArray = (uint32_t *)(data + this->numNodes);
-        for (i = 0; i < this->numEdges; i++) this->data[i] = edgeArray[i];
+        for (i = 0; i < this->numEdges; i++){
+            this->data[i] = edgeArray[i];
+        }
     } else if (galois_version == 2) {
         uint64_t* edgeArray = data + this->numNodes;
         for (i = 0; i < this->numEdges; i++) this->data[i] = edgeArray[i];
@@ -188,6 +195,17 @@ int SYCL_CSR_Graph::loadGalois(string filename) {
 
     munmap(base, statbuf.st_size);
     close(fd);
+    std::cout<<this->numEdges<<std::endl;
+    int iteration = 0;
+    for(int vertex_index = 0; vertex_index<this->numNodes; vertex_index++){
+        for (auto i = this->nodePtr[vertex_index]; i < this->nodePtr[vertex_index+1]; i++) { // for all neighbors
+            auto src = this->data[i];
+            this->edge_start[iteration] = vertex_index;
+            this->edge_end[iteration] = src;
+            iteration = iteration+1;
+        }
+    }
+
     return 1;
 }
 
